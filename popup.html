@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Skoolyst FB Groups Poster v6</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 520px;
+      min-height: 450px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      background: #f0f2f5;
+      color: #1c1e21;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #1877f2, #0d5dbf);
+      color: white;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header h1 { font-size: 14px; font-weight: 700; }
+    .header-right { text-align: right; }
+    .header-right .version { font-size: 10px; opacity: 0.7; }
+    .header-right .status-pill {
+      display: inline-block;
+      background: rgba(255,255,255,0.2);
+      border-radius: 20px;
+      padding: 2px 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      background: white;
+      border-bottom: 2px solid #e4e6ea;
+      overflow-x: auto;
+    }
+    .tab-btn {
+      flex: 1;
+      min-width: 70px;
+      padding: 9px 4px;
+      border: none;
+      background: none;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      color: #65676b;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .tab-btn.active {
+      color: #1877f2;
+      border-bottom: 2px solid #1877f2;
+      margin-bottom: -2px;
+    }
+
+    /* ── Tab Panels ── */
+    .tab-panel { display: none; padding: 12px; max-height: 520px; overflow-y: auto; }
+    .tab-panel.active { display: block; }
+
+    /* ── Cards ── */
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px;
+      border: 1px solid #e4e6ea;
+    }
+    .card-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #65676b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* ── Form Elements ── */
+    textarea, input[type="text"], input[type="url"], input[type="number"], select {
+      width: 100%;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      resize: vertical;
+      transition: border 0.2s;
+      background: #fff;
+    }
+    textarea:focus, input:focus, select:focus {
+      outline: none;
+      border-color: #1877f2;
+      box-shadow: 0 0 0 2px rgba(24,119,242,0.1);
+    }
+    textarea { min-height: 75px; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 7px 13px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn-primary  { background: #1877f2; color: white; }
+    .btn-primary:hover { background: #166fe5; }
+    .btn-success  { background: #42b72a; color: white; }
+    .btn-success:hover { background: #36a420; }
+    .btn-danger   { background: #fa3e3e; color: white; }
+    .btn-danger:hover { background: #e03030; }
+    .btn-secondary { background: #e4e6ea; color: #1c1e21; }
+    .btn-secondary:hover { background: #d8dadf; }
+    .btn-warning  { background: #f7b928; color: white; }
+    .btn-warning:hover { background: #e5a91a; }
+    .btn-purple   { background: #7c4dff; color: white; }
+    .btn-purple:hover { background: #6837f0; }
+    .btn-sm { padding: 4px 9px; font-size: 11px; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-full { width: 100%; justify-content: center; padding: 10px; }
+
+    /* ── List Cards ── */
+    .list-card {
+      border: 1px solid #e4e6ea;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .list-card-header {
+      background: linear-gradient(135deg, #1877f2, #0d5dbf);
+      color: white;
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .list-card-header .list-name {
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .list-card-header .list-meta {
+      font-size: 10px;
+      opacity: 0.85;
+    }
+    .list-card-body { padding: 10px; background: white; display: none; }
+    .list-card-body.open { display: block; }
+
+    /* ── Group Items ── */
+    .group-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      margin-bottom: 4px;
+      border: 1px solid #e4e6ea;
+      background: #f8f9fa;
+    }
+    .group-num {
+      width: 20px; height: 20px;
+      background: #1877f2;
+      color: white;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px; font-weight: 700; flex-shrink: 0;
+    }
+    .group-info { flex: 1; min-width: 0; }
+    .group-name-text { font-size: 11px; font-weight: 600; color: #1c1e21; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .group-url-text  { font-size: 10px; color: #1877f2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ── Status Badges ── */
+    .status-badge {
+      padding: 2px 8px; border-radius: 20px;
+      font-size: 10px; font-weight: 700; flex-shrink: 0;
+    }
+    .status-pending    { background: #e4e6ea; color: #65676b; }
+    .status-processing { background: #fff3cd; color: #856404; }
+    .status-done       { background: #d4edda; color: #155724; }
+    .status-failed     { background: #f8d7da; color: #721c24; }
+
+    /* ── Schedule ── */
+    .schedule-row {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+    }
+    .schedule-time-inputs {
+      display: flex; gap: 6px; align-items: center;
+    }
+    .schedule-time-inputs input[type="number"] {
+      width: 60px;
+      text-align: center;
+    }
+    .toggle-switch {
+      position: relative; width: 44px; height: 24px;
+      display: inline-block; flex-shrink: 0;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #ccc; border-radius: 24px;
+      transition: 0.3s;
+    }
+    .toggle-slider:before {
+      content: ''; position: absolute;
+      height: 18px; width: 18px; left: 3px; bottom: 3px;
+      background: white; border-radius: 50%; transition: 0.3s;
+    }
+    .toggle-switch input:checked + .toggle-slider { background: #42b72a; }
+    .toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); }
+
+    /* ── Progress ── */
+    .progress-wrap { background: #e4e6ea; border-radius: 10px; height: 8px; overflow: hidden; margin: 8px 0; }
+    .progress-bar  { height: 100%; background: #42b72a; border-radius: 10px; transition: width 0.4s ease; }
+    .progress-text { font-size: 11px; color: #65676b; text-align: center; }
+
+    /* ── Rotation Pointer ── */
+    .rotation-info {
+      background: linear-gradient(135deg, #7c4dff11, #1877f211);
+      border: 1px solid #7c4dff33;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    .rotation-info .next-label { font-size: 11px; font-weight: 700; color: #7c4dff; margin-bottom: 4px; }
+    .rotation-info .next-list  { font-size: 13px; font-weight: 700; color: #1c1e21; }
+    .rotation-info .next-time  { font-size: 11px; color: #65676b; margin-top: 3px; }
+
+    /* ── History ── */
+    .history-item {
+      border: 1px solid #e4e6ea;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+    .history-header {
+      padding: 8px 12px;
+      background: #f8f9fa;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+    }
+    .history-header:hover { background: #e4e6ea; }
+    .history-title { font-weight: 700; font-size: 12px; }
+    .history-meta  { font-size: 10px; color: #65676b; margin-top: 2px; }
+    .history-stats { display: flex; gap: 8px; flex-shrink: 0; }
+    .stat-pill {
+      padding: 2px 8px; border-radius: 20px;
+      font-size: 10px; font-weight: 700;
+    }
+    .stat-done   { background: #d4edda; color: #155724; }
+    .stat-failed { background: #f8d7da; color: #721c24; }
+    .history-body { padding: 10px 12px; display: none; border-top: 1px solid #e4e6ea; }
+    .history-body.open { display: block; }
+
+    /* ── Alert ── */
+    .alert {
+      padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 8px;
+    }
+    .alert-info    { background: #cce5ff; color: #004085; border: 1px solid #b8daff; }
+    .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .alert-warning { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+    .alert-danger  { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    .alert-purple  { background: #ede7ff; color: #4a148c; border: 1px solid #ce93d8; }
+
+    /* ── Image Preview ── */
+    #imagePreview { width: 100%; max-height: 100px; object-fit: cover; border-radius: 6px; margin-top: 8px; display: none; }
+
+    /* ── Misc ── */
+    .flex      { display: flex; }
+    .gap-2     { gap: 8px; }
+    .mt-2      { margin-top: 8px; }
+    .mt-3      { margin-top: 12px; }
+    .text-sm   { font-size: 11px; color: #65676b; }
+    .text-center { text-align: center; }
+    .bold      { font-weight: 700; }
+    .empty-state { text-align: center; padding: 20px; color: #65676b; font-size: 12px; }
+    .empty-state .icon { font-size: 28px; margin-bottom: 6px; }
+    .pulse {
+      display: inline-block; width: 8px; height: 8px;
+      background: #42b72a; border-radius: 50%;
+      animation: pulse 1s infinite; margin-right: 5px;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .add-row { display: flex; gap: 6px; margin-bottom: 6px; }
+    .add-row input { flex: 1; }
+    .section-sep { border: none; border-top: 1px solid #e4e6ea; margin: 10px 0; }
+
+    /* Current list indicator */
+    .current-badge {
+      background: #fff3cd; color: #856404; border: 1px solid #ffeeba;
+      padding: 1px 7px; border-radius: 20px; font-size: 10px; font-weight: 700;
+    }
+    .next-up-badge {
+      background: #d4edda; color: #155724; border: 1px solid #c3e6cb;
+      padding: 1px 7px; border-radius: 20px; font-size: 10px; font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <h1>🚀 Skoolyst FB Groups Poster</h1>
+  <div class="header-right">
+    <div class="version">v6.0 — Daily Rotation</div>
+    <div class="status-pill" id="headerStatus">Ready</div>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="tabs">
+  <button class="tab-btn active" data-tab="post">📝 Post</button>
+  <button class="tab-btn" data-tab="lists">📋 Lists</button>
+  <button class="tab-btn" data-tab="schedule">⏰ Schedule</button>
+  <button class="tab-btn" data-tab="status">📊 Status</button>
+  <button class="tab-btn" data-tab="history">🗓 History</button>
+</div>
+
+<!-- ══════════ TAB: POST ══════════ -->
+<div class="tab-panel active" id="tab-post">
+
+  <div id="resumeAlert" class="alert alert-warning" style="display:none">
+    ⚡ <strong>Previous session found!</strong> <span id="resumeInfo"></span>
+    <div class="flex gap-2 mt-2">
+      <button class="btn btn-warning btn-sm" id="btnResume">Resume</button>
+      <button class="btn btn-secondary btn-sm" id="btnFresh">Start Fresh</button>
+    </div>
+  </div>
+
+  <div id="scheduledAlert" class="alert alert-purple" style="display:none">
+    🤖 <strong>Scheduled Run Active!</strong> <span id="scheduledAlertText"></span>
+  </div>
+
+  <!-- Message -->
+  <div class="card">
+    <div class="card-title">📝 Post Message</div>
+    <textarea id="postMessage" placeholder="Type your Facebook post message here...&#10;&#10;Emojis, hashtags, links — sab kuch chalega!"></textarea>
+    <div class="text-sm mt-2" id="charCount">0 characters</div>
+  </div>
+
+  <!-- Image -->
+  <div class="card">
+    <div class="card-title">🖼️ Image (Optional)</div>
+    <input type="url" id="imageUrl" placeholder="https://example.com/image.jpg (public URL)" />
+    <div class="text-sm mt-2">Ya local image upload karo:</div>
+    <input type="file" id="imageFile" accept="image/*" style="margin-top:6px; font-size:12px;" />
+    <img id="imagePreview" src="" alt="Preview" />
+  </div>
+
+  <!-- Delay -->
+  <div class="card">
+    <div class="card-title">⏱️ Delay Between Groups</div>
+    <div class="flex gap-2" style="align-items:center">
+      <input type="range" id="delaySlider" min="5" max="45" value="10" style="flex:1">
+      <span id="delayValue" class="bold">10s</span>
+    </div>
+    <div class="text-sm mt-2">Zyada delay = Facebook se safe rehna</div>
+  </div>
+
+  <!-- Manual Run -->
+  <div class="card">
+    <div class="card-title">🚀 Manual Run — Select List</div>
+    <select id="selectListForPost">
+      <option value="">-- List select karo --</option>
+    </select>
+    <div class="text-sm mt-2" id="selectedListInfo">No list selected</div>
+    <div class="flex gap-2 mt-2">
+      <button class="btn btn-success" id="btnStart" style="flex:1; justify-content:center; padding:9px;">
+        ▶ Start Posting
+      </button>
+      <button class="btn btn-danger" id="btnStop" style="display:none; flex:1; justify-content:center; padding:9px;">
+        ⏹ Stop
+      </button>
+    </div>
+  </div>
+
+  <!-- Run Next Scheduled -->
+  <div class="card">
+    <div class="card-title">🔄 Rotation — Run Next List Now</div>
+    <div class="text-sm mb-2" id="nextListPreview">No rotation configured</div>
+    <button class="btn btn-purple btn-full" id="btnRunNext">
+      ▶ Run Next List in Rotation
+    </button>
+  </div>
+
+</div>
+
+<!-- ══════════ TAB: LISTS ══════════ -->
+<div class="tab-panel" id="tab-lists">
+
+  <!-- Create New List -->
+  <div class="card">
+    <div class="card-title">➕ New Group List</div>
+    <div class="add-row">
+      <input type="text" id="newListName" placeholder='List name, e.g. "Education Groups Karachi"' />
+      <button class="btn btn-primary" id="btnCreateList">Create</button>
+    </div>
+    <div class="text-sm">Max 20 groups per list (Facebook daily limit ke according)</div>
+  </div>
+
+  <!-- Import JSON -->
+  <div class="card">
+    <div class="card-title">📂 Import / Export</div>
+    <div class="flex gap-2">
+      <button class="btn btn-secondary btn-sm" id="btnExportAllLists">Export All Lists</button>
+      <button class="btn btn-secondary btn-sm" id="btnImportLists">Import Lists JSON</button>
+    </div>
+    <input type="file" id="importListsFile" accept=".json" style="display:none" />
+  </div>
+
+  <!-- Lists Container -->
+  <div id="listsContainer">
+    <div class="empty-state">
+      <div class="icon">📋</div>
+      Koi list nahi bani.<br>Upar "New Group List" se banao.
+    </div>
+  </div>
+
+</div>
+
+<!-- ══════════ TAB: SCHEDULE ══════════ -->
+<div class="tab-panel" id="tab-schedule">
+
+  <!-- Rotation Status -->
+  <div class="rotation-info" id="rotationInfo">
+    <div class="next-label">🔄 Next Scheduled Run</div>
+    <div class="next-list" id="nextListName">—</div>
+    <div class="next-time" id="nextRunTime">Schedule configure nahi hai</div>
+  </div>
+
+  <!-- Schedule Settings -->
+  <div class="card">
+    <div class="card-title">⏰ Daily Auto-Run Settings</div>
+
+    <div class="schedule-row">
+      <label class="toggle-switch">
+        <input type="checkbox" id="scheduleEnabled" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span id="scheduleToggleLabel" style="font-weight:600; font-size:12px;">Auto-Run: OFF</span>
+    </div>
+
+    <div id="scheduleTimeRow" style="display:none">
+      <div class="text-sm mb-2">Preferred start time (system start ke baad is time se compare karega):</div>
+      <div class="schedule-time-inputs">
+        <input type="number" id="schedHour"   min="0" max="23" value="8"  placeholder="HH" />
+        <span style="font-size:18px; font-weight:700; color:#65676b">:</span>
+        <input type="number" id="schedMinute" min="0" max="59" value="0"  placeholder="MM" />
+        <span class="text-sm" style="margin-left:4px">24hr format</span>
+      </div>
+    </div>
+
+    <div class="text-sm mt-2" style="background:#f0f2f5; padding:8px; border-radius:6px; line-height:1.6;">
+      <strong>Kaise kaam karta hai:</strong><br>
+      • Jab browser start ho aur scheduled time guzar chuki ho → automatic posting<br>
+      • Har din ek list post hogi, next day next list<br>
+      • Sab lists complete hone par → wapis pehli list se shuru<br>
+      • Next run time: current session complete hone ke 24 ghante baad
+    </div>
+
+    <button class="btn btn-primary mt-2" id="btnSaveSchedule" style="width:100%; justify-content:center;">
+      💾 Save Schedule Settings
+    </button>
+  </div>
+
+  <!-- Rotation Pointer -->
+  <div class="card">
+    <div class="card-title">🔄 Rotation Pointer</div>
+    <div class="text-sm mb-2">Aaj konsi list ka number hai:</div>
+    <div id="rotationPointerInfo" style="font-size:13px; font-weight:600; color:#1877f2; margin-bottom:8px;">
+      Loading...
+    </div>
+    <div class="flex gap-2">
+      <button class="btn btn-secondary btn-sm" id="btnResetPointer">Reset to List 1</button>
+      <button class="btn btn-secondary btn-sm" id="btnSkipList">Skip Current →</button>
+    </div>
+  </div>
+
+  <!-- Last Run Info -->
+  <div class="card" id="lastRunCard" style="display:none">
+    <div class="card-title">✅ Last Completed Run</div>
+    <div id="lastRunInfo"></div>
+  </div>
+
+</div>
+
+<!-- ══════════ TAB: STATUS ══════════ -->
+<div class="tab-panel" id="tab-status">
+
+  <div class="card" id="progressCard" style="display:none">
+    <div class="card-title">
+      <span><span class="pulse" id="runningPulse" style="display:none"></span>Session Progress</span>
+      <span id="sessionListBadge" class="current-badge" style="display:none"></span>
+    </div>
+    <div class="progress-wrap">
+      <div class="progress-bar" id="progressBar" style="width:0%"></div>
+    </div>
+    <div class="progress-text" id="progressText">0 / 0 completed</div>
+    <div class="text-sm mt-2" id="currentGroupText"></div>
+  </div>
+
+  <div class="flex gap-2 mb-2" id="statsRow" style="display:none !important">
+    <div class="card text-center" style="flex:1; padding:8px;">
+      <div style="font-size:20px; font-weight:700; color:#42b72a" id="statDone">0</div>
+      <div class="text-sm">Done</div>
+    </div>
+    <div class="card text-center" style="flex:1; padding:8px;">
+      <div style="font-size:20px; font-weight:700; color:#fa3e3e" id="statFailed">0</div>
+      <div class="text-sm">Failed</div>
+    </div>
+    <div class="card text-center" style="flex:1; padding:8px;">
+      <div style="font-size:20px; font-weight:700; color:#65676b" id="statPending">0</div>
+      <div class="text-sm">Pending</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <span>Per Group Status</span>
+      <button class="btn btn-secondary btn-sm" id="btnResetStatus">Reset All</button>
+    </div>
+    <div id="statusList"></div>
+  </div>
+
+</div>
+
+<!-- ══════════ TAB: HISTORY ══════════ -->
+<div class="tab-panel" id="tab-history">
+
+  <div class="card">
+    <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <span>📜 Posting History</span>
+      <button class="btn btn-danger btn-sm" id="btnClearHistory">Clear All</button>
+    </div>
+    <div id="historyContainer">
+      <div class="empty-state">
+        <div class="icon">🗓</div>
+        Koi history nahi.<br>Pehli posting ke baad yahan record aayega.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>
