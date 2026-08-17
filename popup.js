@@ -179,7 +179,9 @@ function setupPostTab() {
   document.getElementById('btnResume')?.addEventListener('click', resumePosting);
   document.getElementById('btnFresh')?.addEventListener('click', startFresh);
   document.getElementById('btnRunNext').addEventListener('click', runNextListNow);
-  document.getElementById('btnAddPostToQueue').addEventListener('click', savePostQueueDraft);
+  document.querySelectorAll('.jsSavePostQueue').forEach(btn => {
+    btn.addEventListener('click', savePostQueueDraft);
+  });
   document.getElementById('btnClearPostImage').addEventListener('click', clearPostImageDraft);
   document.getElementById('btnCancelPostEdit').addEventListener('click', cancelPostEdit);
   document.getElementById('btnResetPostQueue').addEventListener('click', resetPostQueue);
@@ -335,9 +337,13 @@ function clearPostDraftFields() {
   document.getElementById('imageUrl').value = '';
   document.getElementById('imageFile').value = '';
   document.getElementById('imagePreview').style.display = 'none';
-  document.getElementById('btnAddPostToQueue').textContent = '➕ Add Post to Queue';
+  setSavePostQueueButtonText('➕ Add / Update Post in Queue');
   document.getElementById('btnCancelPostEdit').style.display = 'none';
   updateCharCount();
+}
+
+function setSavePostQueueButtonText(text) {
+  document.querySelectorAll('.jsSavePostQueue').forEach(btn => { btn.textContent = text; });
 }
 
 async function clearPostImageDraft() {
@@ -407,7 +413,7 @@ function loadPostIntoEditor(post) {
   } else {
     document.getElementById('imagePreview').style.display = 'none';
   }
-  document.getElementById('btnAddPostToQueue').textContent = '💾 Update Queued Post';
+  setSavePostQueueButtonText('💾 Update Queued Post');
   document.getElementById('btnCancelPostEdit').style.display = 'inline-flex';
   updateCharCount();
 }

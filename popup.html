@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Skoolyst FB Groups Poster v6</title>
+  <title>Skoolyst FB Groups Poster v6.1</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -329,7 +329,7 @@
 <div class="header">
   <h1>🚀 Skoolyst FB Groups Poster</h1>
   <div class="header-right">
-    <div class="version">v6.0 — Daily Rotation</div>
+    <div class="version">v6.1 — Multi Post Queue</div>
     <div class="status-pill" id="headerStatus">Ready</div>
   </div>
 </div>
@@ -363,6 +363,8 @@
     <div class="card-title">📝 Add Post to Queue</div>
     <textarea id="postMessage" placeholder="Type your Facebook post message here...&#10;&#10;Emojis, hashtags, links — sab kuch chalega!"></textarea>
     <div class="text-sm mt-2" id="charCount">0 characters</div>
+    <div class="alert alert-info mt-2" style="margin-bottom:0">Optional image neeche choose karo, phir post queue mein add karo.</div>
+    <button class="btn btn-primary btn-full mt-2 jsSavePostQueue">➕ Add / Update Post in Queue</button>
   </div>
 
   <!-- Image -->
@@ -376,7 +378,7 @@
       <button class="btn btn-secondary btn-sm" id="btnClearPostImage">Remove Image</button>
       <button class="btn btn-secondary btn-sm" id="btnCancelPostEdit" style="display:none">Cancel Edit</button>
     </div>
-    <button class="btn btn-primary btn-full mt-2" id="btnAddPostToQueue">➕ Add Post to Queue</button>
+    <button class="btn btn-primary btn-full mt-2 jsSavePostQueue">➕ Add / Update Post in Queue</button>
   </div>
 
   <div class="card">
