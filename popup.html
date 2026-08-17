@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Skoolyst FB Groups Poster v6</title>
+  <title>Skoolyst FB Groups Poster v6.1</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -193,6 +193,10 @@
     .status-processing { background: #fff3cd; color: #856404; }
     .status-done       { background: #d4edda; color: #155724; }
     .status-failed     { background: #f8d7da; color: #721c24; }
+    .url-status-pending  { background: #e4e6ea; color: #65676b; }
+    .url-status-success  { background: #d4edda; color: #155724; }
+    .url-status-rejected { background: #f8d7da; color: #721c24; }
+    .rejected-review-item { border-color: #f5c6cb; background: #fff5f5; }
 
     /* ── Schedule ── */
     .schedule-row {
@@ -312,6 +316,11 @@
       background: #d4edda; color: #155724; border: 1px solid #c3e6cb;
       padding: 1px 7px; border-radius: 20px; font-size: 10px; font-weight: 700;
     }
+    .post-queue-item { border: 1px solid #e4e6ea; border-radius: 8px; padding: 8px; margin-top: 8px; background: #f8f9fa; }
+    .post-queue-message { font-size: 11px; font-weight: 600; max-height: 34px; overflow: hidden; }
+    .post-status-pending { background: #e4e6ea; color: #65676b; }
+    .post-status-processing { background: #fff3cd; color: #856404; }
+    .post-status-posted { background: #d4edda; color: #155724; }
   </style>
 </head>
 <body>
@@ -320,7 +329,7 @@
 <div class="header">
   <h1>🚀 Skoolyst FB Groups Poster</h1>
   <div class="header-right">
-    <div class="version">v6.0 — Daily Rotation</div>
+    <div class="version">v6.1 — Multi Post Queue</div>
     <div class="status-pill" id="headerStatus">Ready</div>
   </div>
 </div>
@@ -351,9 +360,11 @@
 
   <!-- Message -->
   <div class="card">
-    <div class="card-title">📝 Post Message</div>
+    <div class="card-title">📝 Add Post to Queue</div>
     <textarea id="postMessage" placeholder="Type your Facebook post message here...&#10;&#10;Emojis, hashtags, links — sab kuch chalega!"></textarea>
     <div class="text-sm mt-2" id="charCount">0 characters</div>
+    <div class="alert alert-info mt-2" style="margin-bottom:0">Optional image neeche choose karo, phir post queue mein add karo.</div>
+    <button class="btn btn-primary btn-full mt-2 jsSavePostQueue">➕ Add / Update Post in Queue</button>
   </div>
 
   <!-- Image -->
@@ -363,6 +374,17 @@
     <div class="text-sm mt-2">Ya local image upload karo:</div>
     <input type="file" id="imageFile" accept="image/*" style="margin-top:6px; font-size:12px;" />
     <img id="imagePreview" src="" alt="Preview" />
+    <div class="flex gap-2 mt-2">
+      <button class="btn btn-secondary btn-sm" id="btnClearPostImage">Remove Image</button>
+      <button class="btn btn-secondary btn-sm" id="btnCancelPostEdit" style="display:none">Cancel Edit</button>
+    </div>
+    <button class="btn btn-primary btn-full mt-2 jsSavePostQueue">➕ Add / Update Post in Queue</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">📚 Post Queue <button class="btn btn-secondary btn-sm" id="btnResetPostQueue">Reset Queue</button></div>
+    <div class="text-sm">Posts run in order. Jab post #1 all groups mein successful ho jaye, extension group 1 se post #2 automatically start karega.</div>
+    <div id="postQueueList"></div>
   </div>
 
   <!-- Delay -->
