@@ -17,7 +17,7 @@ let lists    = [];   // Array of { id, name, groups: [{ name, url, groupId, stat
 let schedule = {};   // { enabled, hour, minute, nextRunAt, currentListIndex, lastRunAt, lastListName }
 let session  = null;
 let history  = [];
-let postData = { message: '', imageUrl: '', imageBase64: '', delay: 10 };
+let postData = { message: '', imageUrl: '', imageBase64: '', delay: 10, posts: [] };
 let isRunning = false;
 
 // ── Init ─────────────────────────────────────────────────────
@@ -54,6 +54,14 @@ function listenToBackground() {
       const listLabel = session.listName ? `\nList: "${session.listName}"` : '';
       alert(`✅ Posting Complete!${listLabel}\n\nSuccessful: ${message.done}\nFailed: ${message.failed}\n\nHistory tab mein full record dekho.`);
     }
+    if (message.action === 'queuedRunStarted') {
+      isRunning = true;
+      setRunningUI(true);
+      document.getElementById('currentGroupText').textContent =
+        `🔁 Starting queued post #${message.postIndex + 1} for "${message.listName}"...`;
+      switchTab('status');
+      loadPostData().then(renderPostQueue);
+    }
     if (message.action === 'scheduledRunStarted') {
       document.getElementById('scheduledAlert').style.display = 'block';
       document.getElementById('scheduledAlertText').textContent =
@@ -84,7 +92,7 @@ async function loadAll() {
   schedule = data[SK.SCHEDULE] || { enabled: false, hour: 8, minute: 0, currentListIndex: 0 };
   session  = data[SK.SESSION]  || null;
   history  = data[SK.HISTORY]  || [];
-  postData = data[SK.POST]     || { message: '', imageUrl: '', imageBase64: '', delay: 10 };
+  postData = normalizePostData(data[SK.POST]);
 
   document.getElementById('postMessage').value      = postData.message  || '';
   document.getElementById('imageUrl').value         = postData.imageUrl || '';
@@ -95,11 +103,17 @@ async function loadAll() {
     document.getElementById('imagePreview').style.display = 'block';
   }
   updateCharCount();
+  renderPostQueue();
 }
 
 async function loadHistory() {
   const data = await chrome.storage.local.get(SK.HISTORY);
   history = data[SK.HISTORY] || [];
+}
+
+async function loadPostData() {
+  const data = await chrome.storage.local.get(SK.POST);
+  postData = normalizePostData(data[SK.POST]);
 }
 
 async function saveLists()   { await chrome.storage.local.set({ [SK.LISTS]:    lists });    }
@@ -164,6 +178,9 @@ function setupPostTab() {
   document.getElementById('btnResume')?.addEventListener('click', resumePosting);
   document.getElementById('btnFresh')?.addEventListener('click', startFresh);
   document.getElementById('btnRunNext').addEventListener('click', runNextListNow);
+  document.getElementById('btnAddPostToQueue').addEventListener('click', addPostToQueue);
+  document.getElementById('btnResetPostQueue').addEventListener('click', resetPostQueue);
+  document.getElementById('postQueueList').addEventListener('click', handlePostQueueClick);
 }
 
 function renderPostTab() {
@@ -181,6 +198,7 @@ function renderPostTab() {
   if (prev !== '') sel.value = prev;
   updateSelectedListInfo();
   updateNextListPreview();
+  renderPostQueue();
 }
 
 function updateSelectedListInfo() {
@@ -210,6 +228,140 @@ function updateNextListPreview() {
 function updateCharCount() {
   const len = document.getElementById('postMessage').value.length;
   document.getElementById('charCount').textContent = len + ' characters';
+}
+
+
+function normalizePostData(raw) {
+  const base = raw || {};
+  const posts = Array.isArray(base.posts) ? base.posts : [];
+  const migratedPosts = posts.map(normalizeQueuedPost).filter(p => p.message);
+  if (migratedPosts.length === 0 && base.message) {
+    migratedPosts.push(normalizeQueuedPost({
+      id: Date.now(),
+      message: base.message,
+      imageUrl: base.imageUrl || '',
+      imageBase64: base.imageBase64 || '',
+      status: 'pending',
+      addedAt: Date.now()
+    }));
+  }
+  return {
+    message: base.message || '',
+    imageUrl: base.imageUrl || '',
+    imageBase64: base.imageBase64 || '',
+    delay: base.delay || 10,
+    posts: migratedPosts
+  };
+}
+
+function normalizeQueuedPost(post) {
+  return {
+    id: post.id || Math.floor(Date.now() + Math.random() * 1000),
+    message: post.message || '',
+    imageUrl: post.imageUrl || '',
+    imageBase64: post.imageBase64 || '',
+    status: ['pending', 'processing', 'posted'].includes(post.status) ? post.status : 'pending',
+    addedAt: post.addedAt || Date.now(),
+    startedAt: post.startedAt || null,
+    postedAt: post.postedAt || null
+  };
+}
+
+async function syncDraftPost() {
+  postData.message = document.getElementById('postMessage').value.trim();
+  postData.imageUrl = document.getElementById('imageUrl').value.trim();
+  await savePost();
+}
+
+async function ensureDraftPostQueued() {
+  const message = document.getElementById('postMessage').value.trim();
+  if ((postData.posts || []).some(p => p.status === 'pending')) return;
+  if (!message) return;
+  postData.posts = postData.posts || [];
+  postData.posts.push(normalizeQueuedPost({
+    message,
+    imageUrl: postData.imageUrl || '',
+    imageBase64: postData.imageBase64 || '',
+    status: 'pending',
+    addedAt: Date.now()
+  }));
+  await savePost();
+  renderPostQueue();
+}
+
+function getNextPendingPost() {
+  return (postData.posts || []).find(p => p.status === 'pending');
+}
+
+async function addPostToQueue() {
+  const message = document.getElementById('postMessage').value.trim();
+  if (!message) { alert('Post message likhna zaroori hai!'); return; }
+  postData.posts = postData.posts || [];
+  postData.posts.push(normalizeQueuedPost({
+    message,
+    imageUrl: postData.imageUrl || '',
+    imageBase64: postData.imageBase64 || '',
+    status: 'pending',
+    addedAt: Date.now()
+  }));
+  postData.message = '';
+  postData.imageUrl = '';
+  postData.imageBase64 = '';
+  document.getElementById('postMessage').value = '';
+  document.getElementById('imageUrl').value = '';
+  document.getElementById('imageFile').value = '';
+  document.getElementById('imagePreview').style.display = 'none';
+  updateCharCount();
+  await savePost();
+  renderPostQueue();
+}
+
+async function resetPostQueue() {
+  if (!confirm('Sab queued posts ko pending kar dein? Posted posts dobara chal sakti hain.')) return;
+  (postData.posts || []).forEach(p => { p.status = 'pending'; p.startedAt = null; p.postedAt = null; });
+  await savePost();
+  renderPostQueue();
+}
+
+async function handlePostQueueClick(e) {
+  const btn = e.target.closest('[data-post-action]');
+  if (!btn) return;
+  const id = Number(btn.dataset.postId);
+  const post = (postData.posts || []).find(p => p.id === id);
+  if (!post) return;
+  if (btn.dataset.postAction === 'remove') {
+    if (!confirm('Yeh post queue se remove karo?')) return;
+    postData.posts = postData.posts.filter(p => p.id !== id);
+  }
+  if (btn.dataset.postAction === 'pending') {
+    post.status = 'pending'; post.startedAt = null; post.postedAt = null;
+  }
+  await savePost();
+  renderPostQueue();
+}
+
+function renderPostQueue() {
+  const container = document.getElementById('postQueueList');
+  if (!container) return;
+  const posts = postData.posts || [];
+  if (posts.length === 0) {
+    container.innerHTML = '<div class="empty-state" style="padding:12px"><div class="icon">📝</div>Koi queued post nahi.<br>Message/image add karke queue mein save karo.</div>';
+    return;
+  }
+  container.innerHTML = posts.map((post, index) => `
+    <div class="post-queue-item">
+      <div class="flex gap-2" style="justify-content:space-between;align-items:flex-start">
+        <div style="min-width:0;flex:1">
+          <div class="post-queue-message">#${index + 1}: ${escHtml(post.message)}</div>
+          <div class="text-sm mt-2">${post.imageBase64 || post.imageUrl ? '🖼️ Image attached' : 'No image'}${post.postedAt ? ` · Posted: ${formatDateTime(post.postedAt)}` : ''}</div>
+        </div>
+        <span class="status-badge post-status-${post.status}">${post.status === 'posted' ? 'Posted successfully' : post.status}</span>
+      </div>
+      <div class="flex gap-2 mt-2">
+        <button class="btn btn-secondary btn-sm" data-post-action="pending" data-post-id="${post.id}">Mark Pending</button>
+        <button class="btn btn-danger btn-sm" data-post-action="remove" data-post-id="${post.id}">Remove</button>
+      </div>
+    </div>`).join('');
 }
 
 // ── Resume session check ──────────────────────────────────────
@@ -245,8 +397,10 @@ async function resumePosting() {
 
 // ── Manual Start Posting (specific list) ────────────────────
 async function startPosting() {
-  const message = document.getElementById('postMessage').value.trim();
-  if (!message) { alert('Post message likhna zaroori hai!'); return; }
+  await syncDraftPost();
+  await ensureDraftPostQueued();
+  const nextPost = getNextPendingPost();
+  if (!nextPost) { alert('Queue mein koi pending post nahi. Pehle post add karo ya Reset Queue dabao.'); return; }
 
   const selIdx = parseInt(document.getElementById('selectListForPost').value);
   if (isNaN(selIdx) || !lists[selIdx]) {
@@ -274,14 +428,21 @@ async function startPosting() {
       error:   null,
       sourceGroupId: g.groupId
     })),
-    message:     message,
-    imageUrl:    postData.imageUrl    || '',
-    imageBase64: postData.imageBase64 || '',
+    postId:      nextPost.id,
+    postIndex:   postData.posts.findIndex(p => p.id === nextPost.id),
+    message:     nextPost.message,
+    imageUrl:    nextPost.imageUrl    || '',
+    imageBase64: nextPost.imageBase64 || '',
     delay:       postData.delay       || 10,
     startedAt:   Date.now(),
-    scheduledRun: false
+    scheduledRun: false,
+    autoPostQueue: true
   };
 
+  nextPost.status = 'processing';
+  nextPost.startedAt = Date.now();
+  await savePost();
+  renderPostQueue();
   await chrome.storage.local.set({ [SK.SESSION]: session });
   await chrome.runtime.sendMessage({ action: 'startSession', session });
   isRunning = true;
@@ -298,8 +459,9 @@ async function stopPosting() {
 }
 
 async function runNextListNow() {
-  const message = document.getElementById('postMessage').value.trim();
-  if (!message) { alert('Pehle Post tab mein message likho!'); return; }
+  await syncDraftPost();
+  await ensureDraftPostQueued();
+  if (!getNextPendingPost()) { alert('Queue mein koi pending post nahi. Pehle post add karo ya Reset Queue dabao.'); return; }
   if (lists.filter(l => getPendingGroups(l).length > 0).length === 0) {
     alert('Koi list nahi. Lists tab mein groups add karo.'); return;
   }

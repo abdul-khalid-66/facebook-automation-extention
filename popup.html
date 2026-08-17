@@ -316,6 +316,11 @@
       background: #d4edda; color: #155724; border: 1px solid #c3e6cb;
       padding: 1px 7px; border-radius: 20px; font-size: 10px; font-weight: 700;
     }
+    .post-queue-item { border: 1px solid #e4e6ea; border-radius: 8px; padding: 8px; margin-top: 8px; background: #f8f9fa; }
+    .post-queue-message { font-size: 11px; font-weight: 600; max-height: 34px; overflow: hidden; }
+    .post-status-pending { background: #e4e6ea; color: #65676b; }
+    .post-status-processing { background: #fff3cd; color: #856404; }
+    .post-status-posted { background: #d4edda; color: #155724; }
   </style>
 </head>
 <body>
@@ -355,7 +360,7 @@
 
   <!-- Message -->
   <div class="card">
-    <div class="card-title">📝 Post Message</div>
+    <div class="card-title">📝 Add Post to Queue</div>
     <textarea id="postMessage" placeholder="Type your Facebook post message here...&#10;&#10;Emojis, hashtags, links — sab kuch chalega!"></textarea>
     <div class="text-sm mt-2" id="charCount">0 characters</div>
   </div>
@@ -367,6 +372,13 @@
     <div class="text-sm mt-2">Ya local image upload karo:</div>
     <input type="file" id="imageFile" accept="image/*" style="margin-top:6px; font-size:12px;" />
     <img id="imagePreview" src="" alt="Preview" />
+    <button class="btn btn-primary btn-full mt-2" id="btnAddPostToQueue">➕ Add Post to Queue</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">📚 Post Queue <button class="btn btn-secondary btn-sm" id="btnResetPostQueue">Reset Queue</button></div>
+    <div class="text-sm">Posts run in order. Jab post #1 all groups mein successful ho jaye, extension group 1 se post #2 automatically start karega.</div>
+    <div id="postQueueList"></div>
   </div>
 
   <!-- Delay -->
