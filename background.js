@@ -67,7 +67,7 @@ async function checkAndRunSchedule() {
 // ── Run the next list in rotation ────────────────────────────
 async function runNextList(lists, schedule, post) {
   const listIndex = schedule.currentListIndex || 0;
-  const validLists = lists.filter(l => l.groups && l.groups.length > 0);
+  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
   if (validLists.length === 0) {
     console.log('[Skoolyst BG] No lists with groups found');
     return;
@@ -79,16 +79,20 @@ async function runNextList(lists, schedule, post) {
 
   console.log(`[Skoolyst BG] Running list ${actualIndex + 1}/${validLists.length}: "${chosenList.name}"`);
 
+  const pendingGroups = getPendingGroups(chosenList);
+
   const session = {
     id:          Date.now(),
     listName:    chosenList.name,
     listIndex:   actualIndex,
-    groups:      chosenList.groups.map(g => ({
+    listId:      chosenList.id,
+    groups:      pendingGroups.map(g => ({
       name:    g.name,
       url:     g.url,
       groupId: g.groupId,
       status:  'pending',
-      error:   null
+      error:   null,
+      sourceGroupId: g.groupId
     })),
     message:     post.message,
     imageUrl:    post.imageUrl    || '',
@@ -204,6 +208,8 @@ async function startSessionInBackground(session) {
   const done   = session.groups.filter(g => g.status === 'done').length;
   const failed = session.groups.filter(g => g.status === 'failed').length;
 
+  await updateSourceListUrlStatuses(session);
+
   // Save to history
   const historyRecord = {
     id:        session.id || Date.now(),
@@ -232,6 +238,37 @@ async function startSessionInBackground(session) {
 
   notifyPopup({ action: 'sessionComplete', done, failed, session, historyRecord });
   console.log(`[Skoolyst BG] Session complete: ${done} done, ${failed} failed`);
+}
+
+
+function getPendingGroups(list) {
+  return (list.groups || []).filter(g => normalizeGroupStatus(g.status) === 'pending');
+}
+
+function normalizeGroupStatus(status) {
+  return ['pending', 'success', 'rejected'].includes(status) ? status : 'pending';
+}
+
+async function updateSourceListUrlStatuses(session) {
+  const data = await chrome.storage.local.get(SK.LISTS);
+  const lists = data[SK.LISTS] || [];
+  const list = session.listId
+    ? lists.find(l => l.id === session.listId)
+    : lists[session.listIndex];
+  if (!list?.groups?.length) return;
+
+  session.groups.forEach(resultGroup => {
+    const source = list.groups.find(g =>
+      (resultGroup.sourceGroupId && g.groupId === resultGroup.sourceGroupId) ||
+      g.url === resultGroup.url
+    );
+    if (!source) return;
+    source.status = resultGroup.status === 'done' ? 'success' : 'rejected';
+    source.lastPostedAt = Date.now();
+    source.lastError = resultGroup.status === 'failed' ? (resultGroup.error || 'Unknown error') : null;
+  });
+
+  await chrome.storage.local.set({ [SK.LISTS]: lists });
 }
 
 function notifyPopup(msg) { chrome.runtime.sendMessage(msg).catch(() => {}); }

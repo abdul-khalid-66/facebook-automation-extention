@@ -13,7 +13,7 @@ const SK = {
 
 const MAX_GROUPS_PER_LIST = 20;
 
-let lists    = [];   // Array of { id, name, groups: [] }
+let lists    = [];   // Array of { id, name, groups: [{ name, url, groupId, status }] }
 let schedule = {};   // { enabled, hour, minute, nextRunAt, currentListIndex, lastRunAt, lastListName }
 let session  = null;
 let history  = [];
@@ -50,7 +50,7 @@ function listenToBackground() {
         `✅ Complete! ${message.done} done, ${message.failed} failed.`;
       renderStatus();
       loadHistory().then(renderHistory);
-      renderScheduleTab();
+      refreshListsFromStorage().then(() => { renderLists(); renderPostTab(); renderScheduleTab(); });
       const listLabel = session.listName ? `\nList: "${session.listName}"` : '';
       alert(`✅ Posting Complete!${listLabel}\n\nSuccessful: ${message.done}\nFailed: ${message.failed}\n\nHistory tab mein full record dekho.`);
     }
@@ -175,7 +175,7 @@ function renderPostTab() {
     const isCurrent = i === (schedule.currentListIndex || 0) % (lists.length || 1);
     const opt = document.createElement('option');
     opt.value = i;
-    opt.textContent = `${l.name} (${l.groups.length} groups)${isCurrent ? ' ← Next' : ''}`;
+    opt.textContent = `${l.name} (${getPendingGroups(l).length} pending / ${l.groups.length} total)${isCurrent ? ' ← Next' : ''}`;
     sel.appendChild(opt);
   });
   if (prev !== '') sel.value = prev;
@@ -191,12 +191,12 @@ function updateSelectedListInfo() {
     info.textContent = 'No list selected'; return;
   }
   const l = lists[idx];
-  info.textContent = `"${l.name}" — ${l.groups.length} groups will be posted`;
+  info.textContent = `"${l.name}" — ${getPendingGroups(l).length} pending groups will be posted (${l.groups.length} total)`;
 }
 
 function updateNextListPreview() {
   const el = document.getElementById('nextListPreview');
-  const validLists = lists.filter(l => l.groups.length > 0);
+  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
   if (validLists.length === 0) {
     el.textContent = 'Koi list nahi — pehle Lists tab mein groups add karo'; return;
   }
@@ -204,7 +204,7 @@ function updateNextListPreview() {
   const next = validLists[idx];
   const nextRunAt = schedule.nextRunAt;
   const timeStr = nextRunAt ? formatDateTime(nextRunAt) : 'Abhi chalao';
-  el.innerHTML = `<strong>${next.name}</strong> (${next.groups.length} groups) — Scheduled: ${timeStr}`;
+  el.innerHTML = `<strong>${next.name}</strong> (${getPendingGroups(next).length} pending groups) — Scheduled: ${timeStr}`;
 }
 
 function updateCharCount() {
@@ -253,20 +253,26 @@ async function startPosting() {
     alert('Pehle koi list select karo!'); return;
   }
   const chosenList = lists[selIdx];
+  const pendingGroups = getPendingGroups(chosenList);
   if (chosenList.groups.length === 0) {
     alert(`"${chosenList.name}" mein koi group nahi. Pehle groups add karo.`); return;
+  }
+  if (pendingGroups.length === 0) {
+    alert(`"${chosenList.name}" mein pending groups nahi. Failed URLs approve karo ya statuses reset karo.`); return;
   }
 
   session = {
     id:        Date.now(),
     listName:  chosenList.name,
     listIndex: selIdx,
-    groups:    chosenList.groups.map(g => ({
+    listId:    chosenList.id,
+    groups:    pendingGroups.map(g => ({
       name:    g.name,
       url:     g.url,
       groupId: g.groupId,
       status:  'pending',
-      error:   null
+      error:   null,
+      sourceGroupId: g.groupId
     })),
     message:     message,
     imageUrl:    postData.imageUrl    || '',
@@ -294,12 +300,12 @@ async function stopPosting() {
 async function runNextListNow() {
   const message = document.getElementById('postMessage').value.trim();
   if (!message) { alert('Pehle Post tab mein message likho!'); return; }
-  if (lists.filter(l => l.groups.length > 0).length === 0) {
+  if (lists.filter(l => getPendingGroups(l).length > 0).length === 0) {
     alert('Koi list nahi. Lists tab mein groups add karo.'); return;
   }
-  const validLists = lists.filter(l => l.groups.length > 0);
+  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
   const idx = (schedule.currentListIndex || 0) % validLists.length;
-  if (!confirm(`Abhi "${validLists[idx].name}" (${validLists[idx].groups.length} groups) run karein?\n\nRotation pointer next list par move ho jayega.`)) return;
+  if (!confirm(`Abhi "${validLists[idx].name}" (${getPendingGroups(validLists[idx]).length} pending groups) run karein?\n\nRotation pointer next list par move ho jayega.`)) return;
 
   const resp = await chrome.runtime.sendMessage({ action: 'runListNow' });
   if (resp && !resp.ok) { alert('Error: ' + resp.error); return; }
@@ -394,6 +400,7 @@ function addGroupToList(listId) {
     name:    name || ('Group ' + (l.groups.length + 1)),
     url:     normalized,
     groupId: groupId,
+    status:  'pending',
     addedAt: Date.now()
   });
 
@@ -416,7 +423,7 @@ function bulkAddToList(listId) {
     const groupId    = extractGroupId(normalized);
     if (!groupId) continue;
     if (l.groups.find(g => extractGroupId(g.url) === groupId)) continue;
-    l.groups.push({ name: 'Group ' + (l.groups.length + 1), url: normalized, groupId, addedAt: Date.now() });
+    l.groups.push({ name: 'Group ' + (l.groups.length + 1), url: normalized, groupId, status: 'pending', addedAt: Date.now() });
     added++;
   }
   document.getElementById(`gbulk_${listId}`).value = '';
@@ -469,7 +476,7 @@ function renderLists() {
     return;
   }
 
-  const validLists = lists.filter(l => l.groups.length > 0);
+  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
   const currentIdx = validLists.length > 0
     ? (schedule.currentListIndex || 0) % validLists.length
     : -1;
@@ -490,6 +497,7 @@ function renderLists() {
             <div class="group-name-text">${escHtml(g.name)}</div>
             <div class="group-url-text">${escHtml(g.url)}</div>
           </div>
+          <span class="status-badge url-status-${normalizeGroupStatus(g.status)}">${normalizeGroupStatus(g.status)}</span>
           <div class="flex gap-2" style="flex-shrink:0">
             <button class="btn btn-secondary btn-sm" data-action="mgup"   data-lid="${lid}" data-gi="${gi}" ${gi===0?'disabled':''}>↑</button>
             <button class="btn btn-secondary btn-sm" data-action="mgdown" data-lid="${lid}" data-gi="${gi}" ${gi===l.groups.length-1?'disabled':''}>↓</button>
@@ -521,16 +529,18 @@ function renderLists() {
             ${isCurrent ? '<span class="current-badge">Today\'s List</span>' : ''}
             ${isNext    ? '<span class="next-up-badge">Next</span>'         : ''}
           </div>
-          <div class="list-meta">${l.groups.length}/${MAX_GROUPS_PER_LIST} groups — Click to expand/collapse</div>
+          <div class="list-meta">${getListStatusSummary(l)} — Click to expand/collapse</div>
         </div>
         <div class="flex gap-2" style="flex-shrink:0;margin-left:6px">
           <button class="btn btn-secondary btn-sm" data-action="mlup"   data-li="${listIdx}" ${listIdx===0?'disabled':''}>↑</button>
           <button class="btn btn-secondary btn-sm" data-action="mldown" data-li="${listIdx}" ${listIdx===lists.length-1?'disabled':''}>↓</button>
+          <button class="btn btn-secondary btn-sm" data-action="reseturlstatus" data-lid="${lid}">↺ Status</button>
           <button class="btn btn-secondary btn-sm" data-action="rename" data-lid="${lid}">✏</button>
           <button class="btn btn-danger btn-sm"    data-action="del"    data-lid="${lid}">🗑</button>
         </div>
       </div>
       <div class="list-card-body" id="listbody_${lid}">
+        ${renderRejectedUrls(l, lid)}
         ${groupRows}
         ${addForm}
       </div>
@@ -561,8 +571,73 @@ function setupListsDelegation() {
       case 'mgup':   e.stopPropagation(); moveGroupInList(lid, gi, -1); break;
       case 'mgdown': e.stopPropagation(); moveGroupInList(lid, gi,  1); break;
       case 'rmg':    e.stopPropagation(); removeGroupFromList(lid, gi); break;
+      case 'approve': e.stopPropagation(); setGroupUrlStatus(lid, gi, 'pending'); break;
+      case 'reject':  e.stopPropagation(); setGroupUrlStatus(lid, gi, 'rejected'); break;
+      case 'reseturlstatus': e.stopPropagation(); resetListUrlStatuses(lid); break;
     }
   });
+}
+
+
+function getPendingGroups(list) {
+  return (list.groups || []).filter(g => normalizeGroupStatus(g.status) === 'pending');
+}
+
+function normalizeGroupStatus(status) {
+  return ['pending', 'success', 'rejected'].includes(status) ? status : 'pending';
+}
+
+function getListStatusSummary(list) {
+  const groups = list.groups || [];
+  const counts = groups.reduce((acc, g) => {
+    acc[normalizeGroupStatus(g.status)]++;
+    return acc;
+  }, { pending: 0, success: 0, rejected: 0 });
+  return `${groups.length}/${MAX_GROUPS_PER_LIST} groups · ✅ ${counts.success} success · ⏳ ${counts.pending} pending · ❌ ${counts.rejected} rejected`;
+}
+
+function renderRejectedUrls(list, listId) {
+  const rejected = (list.groups || [])
+    .map((g, index) => ({ ...g, index }))
+    .filter(g => normalizeGroupStatus(g.status) === 'rejected');
+  if (rejected.length === 0) return '';
+  return `
+    <div class="alert alert-danger" style="margin-bottom:8px;">
+      <strong>❌ Failed / Rejected URLs (${rejected.length})</strong>
+      <div class="text-sm" style="margin-top:3px;color:#721c24">Approve = pending retry mein wapis, Remove = list se delete.</div>
+    </div>
+    ${rejected.map(g => `
+      <div class="group-item rejected-review-item">
+        <div class="group-num" style="background:#fa3e3e">${g.index + 1}</div>
+        <div class="group-info">
+          <div class="group-name-text">${escHtml(g.name)}</div>
+          <div class="group-url-text">${escHtml(g.url)}</div>
+        </div>
+        <span class="status-badge url-status-rejected">rejected</span>
+        <button class="btn btn-success btn-sm" data-action="approve" data-lid="${listId}" data-gi="${g.index}">Approve</button>
+        <button class="btn btn-danger btn-sm" data-action="rmg" data-lid="${listId}" data-gi="${g.index}">Remove</button>
+      </div>`).join('')}`;
+}
+
+async function resetListUrlStatuses(listId) {
+  const l = lists.find(x => x.id === listId);
+  if (!l) return;
+  if (!confirm(`"${l.name}" ke sab URL statuses pending kar dein?`)) return;
+  l.groups.forEach(g => { g.status = 'pending'; g.lastError = null; });
+  await saveLists();
+  renderLists();
+  renderPostTab();
+  renderScheduleTab();
+}
+
+async function setGroupUrlStatus(listId, groupIndex, status) {
+  const l = lists.find(x => x.id === listId);
+  if (!l || !l.groups[groupIndex]) return;
+  l.groups[groupIndex].status = normalizeGroupStatus(status);
+  await saveLists();
+  renderLists();
+  renderPostTab();
+  renderScheduleTab();
 }
 
 // ── Export / Import ──────────────────────────────────────────
@@ -592,6 +667,7 @@ function importLists(e) {
             name:    g.name || 'Group',
             url:     normalizeUrl(g.url || ''),
             groupId: extractGroupId(g.url || '') || '',
+            status:  normalizeGroupStatus(g.status),
             addedAt: Date.now()
           })).filter(g => g.groupId)
         });
@@ -654,7 +730,7 @@ async function saveScheduleSettings() {
 }
 
 function getNextListName() {
-  const validLists = lists.filter(l => l.groups.length > 0);
+  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
   if (validLists.length === 0) return 'No lists';
   const idx = (schedule.currentListIndex || 0) % validLists.length;
   return validLists[idx].name;
@@ -669,7 +745,7 @@ async function resetPointer() {
 }
 
 async function skipList() {
-  const validLists = lists.filter(l => l.groups.length > 0);
+  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
   if (validLists.length === 0) { alert('Koi list nahi.'); return; }
   const cur = (schedule.currentListIndex || 0) % validLists.length;
   const next = (cur + 1) % validLists.length;
@@ -689,7 +765,7 @@ function renderScheduleTab() {
   document.getElementById('schedMinute').value = schedule.minute ?? 0;
 
   // Rotation info
-  const validLists = lists.filter(l => l.groups.length > 0);
+  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
   const total = validLists.length;
 
   if (total === 0) {
@@ -699,7 +775,7 @@ function renderScheduleTab() {
   } else {
     const idx   = (schedule.currentListIndex || 0) % total;
     const next  = validLists[idx];
-    document.getElementById('nextListName').textContent = next.name + ` (${next.groups.length} groups)`;
+    document.getElementById('nextListName').textContent = next.name + ` (${getPendingGroups(next).length} pending groups)`;
     document.getElementById('nextRunTime').textContent  = schedule.enabled && schedule.nextRunAt
       ? `Next run: ${formatDateTime(schedule.nextRunAt)}`
       : schedule.enabled ? 'Will run on next browser startup' : 'Auto-run OFF — Manual sirf';
@@ -720,6 +796,12 @@ function renderScheduleTab() {
   } else {
     lastRunCard.style.display = 'none';
   }
+}
+
+
+async function refreshListsFromStorage() {
+  const data = await chrome.storage.local.get(SK.LISTS);
+  lists = data[SK.LISTS] || [];
 }
 
 // ════════════════════════════════════════════════════════════════
