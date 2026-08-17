@@ -19,6 +19,7 @@ let session  = null;
 let history  = [];
 let postData = { message: '', imageUrl: '', imageBase64: '', delay: 10, posts: [] };
 let isRunning = false;
+let editingPostId = null;
 
 // ── Init ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -178,7 +179,9 @@ function setupPostTab() {
   document.getElementById('btnResume')?.addEventListener('click', resumePosting);
   document.getElementById('btnFresh')?.addEventListener('click', startFresh);
   document.getElementById('btnRunNext').addEventListener('click', runNextListNow);
-  document.getElementById('btnAddPostToQueue').addEventListener('click', addPostToQueue);
+  document.getElementById('btnAddPostToQueue').addEventListener('click', savePostQueueDraft);
+  document.getElementById('btnClearPostImage').addEventListener('click', clearPostImageDraft);
+  document.getElementById('btnCancelPostEdit').addEventListener('click', cancelPostEdit);
   document.getElementById('btnResetPostQueue').addEventListener('click', resetPostQueue);
   document.getElementById('postQueueList').addEventListener('click', handlePostQueueClick);
 }
@@ -293,17 +296,38 @@ function getNextPendingPost() {
   return (postData.posts || []).find(p => p.status === 'pending');
 }
 
-async function addPostToQueue() {
+async function savePostQueueDraft() {
   const message = document.getElementById('postMessage').value.trim();
   if (!message) { alert('Post message likhna zaroori hai!'); return; }
   postData.posts = postData.posts || [];
-  postData.posts.push(normalizeQueuedPost({
-    message,
-    imageUrl: postData.imageUrl || '',
-    imageBase64: postData.imageBase64 || '',
-    status: 'pending',
-    addedAt: Date.now()
-  }));
+
+  if (editingPostId) {
+    const post = postData.posts.find(p => p.id === editingPostId);
+    if (!post) { cancelPostEdit(); return; }
+    post.message = message;
+    post.imageUrl = postData.imageUrl || '';
+    post.imageBase64 = postData.imageBase64 || '';
+    if (post.status === 'posted') {
+      post.status = 'pending';
+      post.postedAt = null;
+    }
+  } else {
+    postData.posts.push(normalizeQueuedPost({
+      message,
+      imageUrl: postData.imageUrl || '',
+      imageBase64: postData.imageBase64 || '',
+      status: 'pending',
+      addedAt: Date.now()
+    }));
+  }
+
+  clearPostDraftFields();
+  await savePost();
+  renderPostQueue();
+}
+
+function clearPostDraftFields() {
+  editingPostId = null;
   postData.message = '';
   postData.imageUrl = '';
   postData.imageBase64 = '';
@@ -311,9 +335,22 @@ async function addPostToQueue() {
   document.getElementById('imageUrl').value = '';
   document.getElementById('imageFile').value = '';
   document.getElementById('imagePreview').style.display = 'none';
+  document.getElementById('btnAddPostToQueue').textContent = '➕ Add Post to Queue';
+  document.getElementById('btnCancelPostEdit').style.display = 'none';
   updateCharCount();
+}
+
+async function clearPostImageDraft() {
+  postData.imageUrl = '';
+  postData.imageBase64 = '';
+  document.getElementById('imageUrl').value = '';
+  document.getElementById('imageFile').value = '';
+  document.getElementById('imagePreview').style.display = 'none';
   await savePost();
-  renderPostQueue();
+}
+
+function cancelPostEdit() {
+  clearPostDraftFields();
 }
 
 async function resetPostQueue() {
@@ -329,6 +366,16 @@ async function handlePostQueueClick(e) {
   const id = Number(btn.dataset.postId);
   const post = (postData.posts || []).find(p => p.id === id);
   if (!post) return;
+  if (btn.dataset.postAction === 'edit') {
+    loadPostIntoEditor(post);
+    return;
+  }
+  if (btn.dataset.postAction === 'moveup') {
+    moveQueuedPost(id, -1);
+  }
+  if (btn.dataset.postAction === 'movedown') {
+    moveQueuedPost(id, 1);
+  }
   if (btn.dataset.postAction === 'remove') {
     if (!confirm('Yeh post queue se remove karo?')) return;
     postData.posts = postData.posts.filter(p => p.id !== id);
@@ -338,6 +385,31 @@ async function handlePostQueueClick(e) {
   }
   await savePost();
   renderPostQueue();
+}
+
+function moveQueuedPost(postId, direction) {
+  const idx = (postData.posts || []).findIndex(p => p.id === postId);
+  const nextIdx = idx + direction;
+  if (idx === -1 || nextIdx < 0 || nextIdx >= postData.posts.length) return;
+  [postData.posts[idx], postData.posts[nextIdx]] = [postData.posts[nextIdx], postData.posts[idx]];
+}
+
+function loadPostIntoEditor(post) {
+  editingPostId = post.id;
+  postData.message = post.message || '';
+  postData.imageUrl = post.imageUrl || '';
+  postData.imageBase64 = post.imageBase64 || '';
+  document.getElementById('postMessage').value = postData.message;
+  document.getElementById('imageUrl').value = postData.imageUrl;
+  if (postData.imageBase64) {
+    document.getElementById('imagePreview').src = postData.imageBase64;
+    document.getElementById('imagePreview').style.display = 'block';
+  } else {
+    document.getElementById('imagePreview').style.display = 'none';
+  }
+  document.getElementById('btnAddPostToQueue').textContent = '💾 Update Queued Post';
+  document.getElementById('btnCancelPostEdit').style.display = 'inline-flex';
+  updateCharCount();
 }
 
 function renderPostQueue() {
@@ -352,12 +424,15 @@ function renderPostQueue() {
     <div class="post-queue-item">
       <div class="flex gap-2" style="justify-content:space-between;align-items:flex-start">
         <div style="min-width:0;flex:1">
-          <div class="post-queue-message">#${index + 1}: ${escHtml(post.message)}</div>
+          <div class="post-queue-message">Order #${index + 1}: ${escHtml(post.message)}</div>
           <div class="text-sm mt-2">${post.imageBase64 || post.imageUrl ? '🖼️ Image attached' : 'No image'}${post.postedAt ? ` · Posted: ${formatDateTime(post.postedAt)}` : ''}</div>
         </div>
         <span class="status-badge post-status-${post.status}">${post.status === 'posted' ? 'Posted successfully' : post.status}</span>
       </div>
-      <div class="flex gap-2 mt-2">
+      <div class="flex gap-2 mt-2" style="flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" data-post-action="moveup" data-post-id="${post.id}" ${index===0?'disabled':''}>↑ Up</button>
+        <button class="btn btn-secondary btn-sm" data-post-action="movedown" data-post-id="${post.id}" ${index===posts.length-1?'disabled':''}>↓ Down</button>
+        <button class="btn btn-primary btn-sm" data-post-action="edit" data-post-id="${post.id}">Edit</button>
         <button class="btn btn-secondary btn-sm" data-post-action="pending" data-post-id="${post.id}">Mark Pending</button>
         <button class="btn btn-danger btn-sm" data-post-action="remove" data-post-id="${post.id}">Remove</button>
       </div>
