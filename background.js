@@ -54,20 +54,20 @@ async function checkAndRunSchedule() {
   const lists = data[SK.LISTS] || [];
   if (lists.length === 0) return;
 
-  const post = data[SK.POST];
-  if (!post || !post.message) {
-    console.log('[Skoolyst BG] No post message configured, skipping scheduled run');
+  const post = getNextPendingPost(data[SK.POST]);
+  if (!post) {
+    console.log('[Skoolyst BG] No pending queued post configured, skipping scheduled run');
     return;
   }
 
   console.log('[Skoolyst BG] Scheduled run triggered!');
-  await runNextList(lists, schedule, post);
+  await runNextList(lists, schedule, { ...post, delay: data[SK.POST]?.delay || 10 });
 }
 
 // ── Run the next list in rotation ────────────────────────────
 async function runNextList(lists, schedule, post) {
   const listIndex = schedule.currentListIndex || 0;
-  const validLists = lists.filter(l => l.groups && l.groups.length > 0);
+  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
   if (validLists.length === 0) {
     console.log('[Skoolyst BG] No lists with groups found');
     return;
@@ -79,25 +79,33 @@ async function runNextList(lists, schedule, post) {
 
   console.log(`[Skoolyst BG] Running list ${actualIndex + 1}/${validLists.length}: "${chosenList.name}"`);
 
+  const pendingGroups = getPendingGroups(chosenList);
+
   const session = {
     id:          Date.now(),
     listName:    chosenList.name,
     listIndex:   actualIndex,
-    groups:      chosenList.groups.map(g => ({
+    listId:      chosenList.id,
+    groups:      pendingGroups.map(g => ({
       name:    g.name,
       url:     g.url,
       groupId: g.groupId,
       status:  'pending',
-      error:   null
+      error:   null,
+      sourceGroupId: g.groupId
     })),
+    postId:      post.id || null,
+    postIndex:   post.postIndex ?? null,
     message:     post.message,
     imageUrl:    post.imageUrl    || '',
     imageBase64: post.imageBase64 || '',
     delay:       post.delay       || 10,
     startedAt:   Date.now(),
-    scheduledRun: true
+    scheduledRun: true,
+    autoPostQueue: true
   };
 
+  await markQueuedPostProcessing(post.id);
   await chrome.storage.local.set({ [SK.SESSION]: session });
 
   // Advance pointer for next time
@@ -142,9 +150,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const data = await chrome.storage.local.get([SK.LISTS, SK.SCHEDULE, SK.POST]);
       const lists = data[SK.LISTS] || [];
       const schedule = data[SK.SCHEDULE] || { currentListIndex: 0 };
-      const post = data[SK.POST];
-      if (!post || !post.message) { sendResponse({ ok: false, error: 'No post message set' }); return; }
-      await runNextList(lists, schedule, post);
+      const post = getNextPendingPost(data[SK.POST]);
+      if (!post) { sendResponse({ ok: false, error: 'No pending queued post set' }); return; }
+      await runNextList(lists, schedule, { ...post, delay: data[SK.POST]?.delay || 10 });
       sendResponse({ ok: true });
     })();
     return true;
@@ -204,6 +212,8 @@ async function startSessionInBackground(session) {
   const done   = session.groups.filter(g => g.status === 'done').length;
   const failed = session.groups.filter(g => g.status === 'failed').length;
 
+  const sourceListUpdated = await updateSourceListUrlStatuses(session);
+
   // Save to history
   const historyRecord = {
     id:        session.id || Date.now(),
@@ -232,7 +242,178 @@ async function startSessionInBackground(session) {
 
   notifyPopup({ action: 'sessionComplete', done, failed, session, historyRecord });
   console.log(`[Skoolyst BG] Session complete: ${done} done, ${failed} failed`);
+
+  if (session.autoPostQueue && sourceListUpdated) {
+    await continueQueuedFlow(session, failed);
+  } else {
+    await updatePostQueueAfterSession(session, failed, false);
+  }
 }
+
+
+
+function getPendingGroups(list) {
+  return (list.groups || []).filter(g => normalizeGroupStatus(g.status) === 'pending');
+}
+
+function normalizeGroupStatus(status) {
+  return ['pending', 'success', 'rejected'].includes(status) ? status : 'pending';
+}
+
+function normalizePostData(raw) {
+  const base = raw || {};
+  const posts = Array.isArray(base.posts) ? base.posts : [];
+  if (posts.length === 0 && base.message) {
+    posts.push({
+      id: Date.now(),
+      message: base.message,
+      imageUrl: base.imageUrl || '',
+      imageBase64: base.imageBase64 || '',
+      status: 'pending',
+      addedAt: Date.now()
+    });
+  }
+  return { ...base, posts, delay: base.delay || 10 };
+}
+
+function getNextPendingPost(rawPostData) {
+  const data = normalizePostData(rawPostData);
+  const postIndex = (data.posts || []).findIndex(p => p.status === 'pending');
+  return postIndex === -1 ? null : { ...data.posts[postIndex], postIndex };
+}
+
+async function markQueuedPostProcessing(postId) {
+  if (!postId) return;
+  const data = await chrome.storage.local.get(SK.POST);
+  const postData = normalizePostData(data[SK.POST]);
+  const post = postData.posts.find(p => p.id === postId);
+  if (!post) return;
+  post.status = 'processing';
+  post.startedAt = Date.now();
+  await chrome.storage.local.set({ [SK.POST]: postData });
+}
+
+async function updatePostQueueAfterSession(session, failed, allListsDone) {
+  if (!session.postId) return;
+  const data = await chrome.storage.local.get(SK.POST);
+  const postData = normalizePostData(data[SK.POST]);
+  const post = postData.posts.find(p => p.id === session.postId);
+  if (!post) return;
+  if (failed === 0 && allListsDone) {
+    post.status = 'posted';
+    post.postedAt = Date.now();
+  } else {
+    post.status = 'processing';
+  }
+  await chrome.storage.local.set({ [SK.POST]: postData });
+}
+
+async function updateSourceListUrlStatuses(session) {
+  const data = await chrome.storage.local.get(SK.LISTS);
+  const lists = data[SK.LISTS] || [];
+  const list = session.listId
+    ? lists.find(l => l.id === session.listId)
+    : lists[session.listIndex];
+  if (!list?.groups?.length) return false;
+
+  session.groups.forEach(resultGroup => {
+    const source = list.groups.find(g =>
+      (resultGroup.sourceGroupId && g.groupId === resultGroup.sourceGroupId) ||
+      g.url === resultGroup.url
+    );
+    if (!source) return;
+    source.status = resultGroup.status === 'done' ? 'success' : 'rejected';
+    source.lastPostedAt = Date.now();
+    source.lastError = resultGroup.status === 'failed' ? (resultGroup.error || 'Unknown error') : null;
+  });
+
+  await chrome.storage.local.set({ [SK.LISTS]: lists });
+  return true;
+}
+
+async function continueQueuedFlow(session, failed) {
+  if (failed > 0) {
+    await updatePostQueueAfterSession(session, failed, false);
+    return;
+  }
+
+  const data = await chrome.storage.local.get([SK.POST, SK.LISTS]);
+  const postData = normalizePostData(data[SK.POST]);
+  const currentPost = postData.posts.find(p => p.id === session.postId);
+  if (!currentPost) return;
+
+  const remainingLists = (data[SK.LISTS] || []).filter(l => getPendingGroups(l).length > 0);
+  if (remainingLists.length > 0) {
+    currentPost.status = 'processing';
+    await chrome.storage.local.set({ [SK.POST]: postData });
+    await startQueuedPostForList(session, currentPost, remainingLists[0], postData);
+    return;
+  }
+
+  await updatePostQueueAfterSession(session, 0, true);
+  await resetAllListsForNextPost();
+  await startNextQueuedPost(session);
+}
+
+async function resetAllListsForNextPost() {
+  const data = await chrome.storage.local.get(SK.LISTS);
+  const lists = data[SK.LISTS] || [];
+  lists.forEach(list => {
+    (list.groups || []).forEach(g => {
+      g.status = 'pending';
+      g.lastError = null;
+    });
+  });
+  await chrome.storage.local.set({ [SK.LISTS]: lists });
+}
+
+async function startNextQueuedPost(previousSession) {
+  const data = await chrome.storage.local.get([SK.POST, SK.LISTS]);
+  const postData = normalizePostData(data[SK.POST]);
+  const nextPost = getNextPendingPost(postData);
+  if (!nextPost) return;
+  const list = (data[SK.LISTS] || []).find(l => getPendingGroups(l).length > 0);
+  if (!list) return;
+
+  nextPost.status = 'processing';
+  nextPost.startedAt = Date.now();
+  await chrome.storage.local.set({ [SK.POST]: postData });
+  await startQueuedPostForList(previousSession, nextPost, list, postData);
+}
+
+async function startQueuedPostForList(previousSession, post, list, postData) {
+  const pendingGroups = getPendingGroups(list || {});
+  if (!list || pendingGroups.length === 0) return;
+
+  const nextSession = {
+    id: Date.now(),
+    listName: list.name,
+    listIndex: previousSession.listIndex,
+    listId: list.id,
+    postId: post.id,
+    postIndex: post.postIndex ?? postData.posts.findIndex(p => p.id === post.id),
+    groups: pendingGroups.map(g => ({
+      name: g.name,
+      url: g.url,
+      groupId: g.groupId,
+      status: 'pending',
+      error: null,
+      sourceGroupId: g.groupId
+    })),
+    message: post.message,
+    imageUrl: post.imageUrl || '',
+    imageBase64: post.imageBase64 || '',
+    delay: postData.delay || previousSession.delay || 10,
+    startedAt: Date.now(),
+    scheduledRun: previousSession.scheduledRun || false,
+    autoPostQueue: true
+  };
+
+  await chrome.storage.local.set({ [SK.SESSION]: nextSession });
+  notifyPopup({ action: 'queuedRunStarted', listName: list.name, postIndex: nextSession.postIndex });
+  await startSessionInBackground(nextSession);
+}
+
 
 function notifyPopup(msg) { chrome.runtime.sendMessage(msg).catch(() => {}); }
 async function saveSession(session) { await chrome.storage.local.set({ [SK.SESSION]: session }); }
