@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Skoolyst FB Groups Poster  —  background.js  v7.1 (text + image + MCQ polls)
+//  Skoolyst FB Groups Poster  —  background.js  v7.2 (text + image + MCQ polls)
 //  Features:
 //    • Group Lists (named, max 20 groups each)
 //    • Daily Rotation: one list per day, pointer advances each run
@@ -504,6 +504,7 @@ function startPosting(postMessage, imageUrl, imageBase64, pollOptions) {
   window.__skoolystRunning = true;
   window.__skoolystResult  = null;
   window.__skoolystLog     = [];
+  window.__skoolystPostClicked = false;
 
   function log(msg) { console.log('[Skoolyst]', msg); (window.__skoolystLog = window.__skoolystLog || []).push(msg); }
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -673,8 +674,7 @@ function startPosting(postMessage, imageUrl, imageBase64, pollOptions) {
     el.dispatchEvent(new MouseEvent('mousedown',     { bubbles: true, cancelable: true }));
     el.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true, cancelable: true }));
     el.dispatchEvent(new MouseEvent('mouseup',       { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent('click',         { bubbles: true, cancelable: true }));
-    try { el.click(); } catch (e) {}
+    try { el.click(); } catch (e) {}   // exactly ONE click (a 2nd synthetic click = double action)
   }
 
   // The REAL "Create post" modal (page can contain several role=dialog nodes)
@@ -862,39 +862,43 @@ function startPosting(postMessage, imageUrl, imageBase64, pollOptions) {
     return false;
   }
 
+  // Clicks Post EXACTLY ONCE per page run. A second click would publish a duplicate
+  // (poll modals stay open until Facebook responds, so a re-click creates another poll).
   async function clickPostButton(timeout) {
+    if (window.__skoolystPostClicked) { log('Post already clicked — skipping'); return true; }
+    const press = async (btn) => {
+      window.__skoolystPostClicked = true;          // set BEFORE clicking: no path can click twice
+      log('Clicking Post (once)');
+      btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new MouseEvent('mousedown',     { bubbles: true, cancelable: true }));
+      await sleep(120);
+      btn.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new MouseEvent('mouseup',       { bubbles: true, cancelable: true }));
+      btn.click();                                     // the only click event
+      return true;
+    };
     const end = Date.now() + timeout;
     while (Date.now() < end) {
-      const allPostBtns = Array.from(document.querySelectorAll('[aria-label="Post"][role="button"]'));
+      const dlg = getComposerDialog();
+      const scope = dlg || document;
+      const allPostBtns = Array.from(scope.querySelectorAll('[aria-label="Post"][role="button"]'));
       for (const btn of allPostBtns) {
         if (!isVisible(btn) || btn.getAttribute('aria-disabled') === 'true') continue;
-        log('Clicking Post');
-        btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-        btn.dispatchEvent(new MouseEvent('mousedown',     { bubbles: true, cancelable: true }));
-        await sleep(120);
-        btn.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true, cancelable: true }));
-        btn.dispatchEvent(new MouseEvent('mouseup',       { bubbles: true, cancelable: true }));
-        btn.dispatchEvent(new MouseEvent('click',         { bubbles: true, cancelable: true }));
-        btn.click(); return true;
+        return await press(btn);
       }
-      for (const btn of document.querySelectorAll('[role="button"]')) {
+      for (const btn of scope.querySelectorAll('[role="button"]')) {
         if (!isVisible(btn) || btn.getAttribute('aria-disabled') === 'true') continue;
         for (const span of btn.querySelectorAll('span')) {
           if (span.children.length === 0 && span.textContent?.trim() === 'Post') {
             const lbl = btn.getAttribute('aria-label') || '';
             if (lbl && lbl !== 'Post') continue;
-            btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); await sleep(120);
-            btn.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true }));
-            btn.dispatchEvent(new MouseEvent('click',     { bubbles: true }));
-            btn.click(); return true;
+            return await press(btn);
           }
         }
       }
       await sleep(600);
     }
-    const last = document.querySelector('[aria-label="Post"][role="button"]');
-    if (last) { last.click(); return true; }
-    return false;
+    return false;   // never force-click a disabled button
   }
 
   (async () => {
@@ -945,7 +949,7 @@ function startPosting(postMessage, imageUrl, imageBase64, pollOptions) {
       if (!clicked) { window.__skoolystResult = { done: true, success: false, error: 'Post button not found' }; return; }
 
       const postStart = Date.now();
-      while (Date.now() - postStart < 10000) {
+      while (Date.now() - postStart < 20000) {
         await sleep(800);
         if (!document.querySelector('[role="dialog"]')) {
           log('Done!'); window.__skoolystResult = { done: true, success: true }; window.__skoolystRunning = false; return;
