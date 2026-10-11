@@ -361,6 +361,22 @@
   <!-- Message -->
   <div class="card">
     <div class="card-title">📝 Add Post to Queue</div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;margin-bottom:8px;cursor:pointer;">
+      <input type="checkbox" id="pollMode" style="width:auto;margin:0"> 📊 Poll mode (MCQ → Facebook Poll)
+    </label>
+    <div id="pollHelp" class="alert alert-info" style="display:none;margin-bottom:8px">
+      Format (ek ya zyada MCQs paste karo, har MCQ ke beech <strong>blank line</strong>):<br>
+      <code style="white-space:pre-wrap">❓ Question here?
+🔘 A) Option one
+🔘 B) Option two
+🔘 C) Option three
+🔘 D) Option four</code><br>
+      Question post text banega, options poll options. Image poll ke saath ignore hoti hai.
+      <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;">
+        <input type="checkbox" id="pollKeepLabels" checked style="width:auto;margin:0"> Options mein "A) B) C)" labels rakhna
+      </label>
+    </div>
+    <div id="pollPreview" class="text-sm" style="display:none;margin-bottom:6px"></div>
     <textarea id="postMessage" placeholder="Type your Facebook post message here...&#10;&#10;Emojis, hashtags, links — sab kuch chalega!"></textarea>
     <div class="text-sm mt-2" id="charCount">0 characters</div>
     <div class="alert alert-info mt-2" style="margin-bottom:0">Optional image neeche choose karo, phir post queue mein add karo.</div>

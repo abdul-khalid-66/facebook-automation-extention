@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════
-//  Skoolyst FB Groups Poster  —  background.js  v6.0
+//  Skoolyst FB Groups Poster  —  background.js  v7.1 (text + image + MCQ polls)
 //  Features:
 //    • Group Lists (named, max 20 groups each)
 //    • Daily Rotation: one list per day, pointer advances each run
@@ -99,6 +99,8 @@ async function runNextList(lists, schedule, post) {
     message:     post.message,
     imageUrl:    post.imageUrl    || '',
     imageBase64: post.imageBase64 || '',
+    postType:    post.type === 'poll' ? 'poll' : 'text',
+    pollOptions: post.pollOptions || [],
     delay:       post.delay       || 10,
     startedAt:   Date.now(),
     scheduledRun: true,
@@ -188,7 +190,9 @@ async function startSessionInBackground(session) {
         url:         g.url,
         message:     session.message,
         imageUrl:    session.imageUrl    || '',
-        imageBase64: session.imageBase64 || ''
+        imageBase64: session.imageBase64 || '',
+        postType:    session.postType    || 'text',
+        pollOptions: session.pollOptions || []
       });
       g.status = (result && result.success) ? 'done' : 'failed';
       if (!result?.success) g.error = result?.error || 'Unknown error';
@@ -393,6 +397,8 @@ async function startQueuedPostForList(post, list, postData, previousSession) {
     message: post.message,
     imageUrl: post.imageUrl || '',
     imageBase64: post.imageBase64 || '',
+    postType: post.type === 'poll' ? 'poll' : 'text',
+    pollOptions: post.pollOptions || [],
     delay: postData.delay || previousSession.delay || 10,
     startedAt: Date.now(),
     scheduledRun: previousSession.scheduledRun || false,
@@ -440,7 +446,7 @@ function notifyPopup(msg) { chrome.runtime.sendMessage(msg).catch(() => {}); }
 async function saveSession(session) { await chrome.storage.local.set({ [SK.SESSION]: session }); }
 
 // ── Post to one group (tab open → inject → post → close) ─────
-async function handlePostToGroup({ url, message, imageUrl, imageBase64 }) {
+async function handlePostToGroup({ url, message, imageUrl, imageBase64, postType, pollOptions }) {
   let tab = null;
   try {
     tab = await chrome.tabs.create({ url, active: true });
@@ -450,7 +456,7 @@ async function handlePostToGroup({ url, message, imageUrl, imageBase64 }) {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: startPosting,
-      args: [message, imageUrl || '', imageBase64 || '']
+      args: [message, imageUrl || '', imageBase64 || '', postType === 'poll' ? (pollOptions || []) : []]
     });
 
     const result = await pollForResult(tab.id, 90000);
@@ -493,7 +499,7 @@ async function pollForResult(tabId, timeout) {
 // ══════════════════════════════════════════════════════════════
 //  Injected into FB page (unchanged from v5 — proven working)
 // ══════════════════════════════════════════════════════════════
-function startPosting(postMessage, imageUrl, imageBase64) {
+function startPosting(postMessage, imageUrl, imageBase64, pollOptions) {
   if (window.__skoolystRunning) return;
   window.__skoolystRunning = true;
   window.__skoolystResult  = null;
@@ -659,6 +665,203 @@ function startPosting(postMessage, imageUrl, imageBase64) {
     return true;
   }
 
+
+  // ═══════════ POLL SUPPORT (v7.1) ═══════════
+  function fireClick(el) {
+    try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent('mousedown',     { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent('mouseup',       { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent('click',         { bubbles: true, cancelable: true }));
+    try { el.click(); } catch (e) {}
+  }
+
+  // The REAL "Create post" modal (page can contain several role=dialog nodes)
+  function getComposerDialog() {
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).filter(isVisible);
+    const txt = d => (d.innerText || '');
+    return dialogs.find(d => /add poll/i.test(txt(d)))
+        || dialogs.find(d => /create post/i.test(txt(d)))
+        || dialogs.find(d => d.querySelector('[data-lexical-editor="true"]'))
+        || dialogs[dialogs.length - 1] || null;
+  }
+
+  function findButtonByText(texts, scope, partial) {
+    const wanted = texts.map(t => t.toLowerCase());
+    const root = scope === 'dialog' ? getComposerDialog() : document;
+    if (!root) return null;
+    const cands = root.querySelectorAll('[role="button"], div[tabindex="0"], a[role="button"], button');
+    for (const el of cands) {
+      if (scope === 'page' && el.closest('[role="dialog"]')) continue;
+      if (!isVisible(el) || el.getAttribute('aria-disabled') === 'true') continue;
+      const aria = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+      const txt  = (el.innerText || el.textContent || '').trim().toLowerCase();
+      const hit = v => v && (partial ? wanted.some(w => v.includes(w)) : wanted.includes(v));
+      if (hit(aria) || hit(txt)) return el;
+    }
+    return null;
+  }
+
+  async function openPollComposer() {
+    const end = Date.now() + 15000;
+    while (Date.now() < end) {
+      const btn = findButtonByText(['Poll'], 'page');
+      if (btn) { log('Poll button found on page'); fireClick(btn); await sleep(2500); return true; }
+      await sleep(600);
+    }
+    log('Poll button not on page — trying via composer dialog');
+    const trigger = await findComposerTrigger(8000);
+    if (!trigger) return false;
+    if (!trigger._alreadyOpen) { fireClick(trigger); await sleep(3000); }
+    let pbtn = findButtonByText(['Poll'], 'dialog');
+    if (!pbtn) {
+      const more = findButtonByText(['More', 'More options'], 'dialog');
+      if (more) { fireClick(more); await sleep(1200); pbtn = findButtonByText(['Poll'], 'dialog') || findButtonByText(['Poll'], 'page'); }
+    }
+    if (!pbtn) return false;
+    fireClick(pbtn); await sleep(2000);
+    return true;
+  }
+
+  // Wait until poll UI ("Add poll" / "Option 1") is really inside the modal
+  async function waitForPollUi(timeout) {
+    const end = Date.now() + timeout;
+    while (Date.now() < end) {
+      const d = getComposerDialog();
+      if (d && /option\s*1/i.test(d.innerText || '')) return true;
+      await sleep(500);
+    }
+    return false;
+  }
+
+  // Poll option fields: located via their "Option N" label/placeholder; works for
+  // <input>, <textarea> and contenteditable fields.
+  function getPollFields() {
+    const dlg = getComposerDialog();
+    if (!dlg) return [];
+    const FIELD = 'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea, [contenteditable="true"], [role="textbox"]';
+    const notMain = el => !el.closest('[data-lexical-editor="true"]') && !el.matches('[data-lexical-editor="true"]');
+    const fields = [];
+    const add = f => { if (f && !fields.includes(f)) fields.push(f); };
+
+    // 1) attribute based (aria-label / placeholder = "Option N")
+    dlg.querySelectorAll(FIELD).forEach(f => {
+      if (!notMain(f)) return;
+      const hint = (f.getAttribute('aria-label') || '') + ' ' + (f.getAttribute('placeholder') || '') + ' ' + (f.getAttribute('aria-placeholder') || '');
+      if (/^\s*option\s*\d+\s*$/i.test(hint.trim()) || /option\s*\d+/i.test(hint)) add(f);
+    });
+
+    // 2) visible label text "Option N" -> nearest single field around it
+    if (fields.length === 0) {
+      const labels = Array.from(dlg.querySelectorAll('span, div, label'))
+        .filter(el => el.children.length === 0 && /^option\s*\d+$/i.test((el.textContent || '').trim()));
+      for (const lab of labels) {
+        let node = lab;
+        for (let up = 0; up < 7 && node; up++) {
+          node = node.parentElement;
+          if (!node) break;
+          const cands = Array.from(node.querySelectorAll(FIELD)).filter(notMain);
+          if (cands.length === 1) { add(cands[0]); break; }
+          if (cands.length > 1) break;       // ambiguous container, stop
+        }
+      }
+    }
+    // sort in DOM order (top → bottom)
+    fields.sort((a, c) => a.getBoundingClientRect().top - c.getBoundingClientRect().top);
+    return fields;
+  }
+
+  function describeDialog() {
+    const d = getComposerDialog();
+    if (!d) return 'no-dialog (dialogs on page: ' + document.querySelectorAll('[role="dialog"]').length + ')';
+    return 'inputs:' + d.querySelectorAll('input').length + ' textareas:' + d.querySelectorAll('textarea').length +
+           ' editable:' + d.querySelectorAll('[contenteditable="true"]').length + ' textboxes:' + d.querySelectorAll('[role="textbox"]').length;
+  }
+
+  async function setFieldValue(f, val) {
+    f.focus(); try { f.click(); } catch (e) {} await sleep(150);
+    const isInput = f.tagName === 'INPUT' || f.tagName === 'TEXTAREA';
+    const read = () => isInput ? f.value : (f.innerText || f.textContent || '');
+    if (isInput) {
+      try { f.select(); document.execCommand('insertText', false, val); } catch (e) {}
+      if (f.value !== val) {
+        const proto = f.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, 'value').set.call(f, val);
+        f.dispatchEvent(new Event('input',  { bubbles: true }));
+        f.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    } else {
+      try {
+        document.execCommand('selectAll', false, null);
+        document.execCommand('delete', false, null);
+        document.execCommand('insertText', false, val);
+      } catch (e) {}
+      if (!read().trim()) {
+        try {
+          const dt = new DataTransfer(); dt.setData('text/plain', val);
+          f.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
+        } catch (e) {}
+      }
+    }
+    await sleep(250);
+    return read().trim() === val.trim();
+  }
+
+  async function fillPollOptions(options) {
+    if (!(await waitForPollUi(8000))) log('Poll UI text not detected yet — continuing anyway');
+    for (let guard = 0; guard < 15; guard++) {
+      if (getPollFields().length >= options.length) break;
+      const add = findButtonByText(['Add Option'], 'dialog', true);
+      if (!add) { log('Add Option button not found'); break; }
+      fireClick(add); await sleep(800);
+    }
+    let fields = getPollFields();
+    if (fields.length < options.length) {
+      return { ok: false, error: 'Poll option inputs not found (' + fields.length + '/' + options.length + ') [' + describeDialog() + ']' };
+    }
+    for (let i = 0; i < options.length; i++) {
+      fields = getPollFields();               // re-query (React may re-render)
+      const okSet = await setFieldValue(fields[i], options[i]);
+      log('Option ' + (i + 1) + (okSet ? ' set' : ' NOT set') + ': ' + options[i]);
+      if (!okSet) return { ok: false, error: 'Could not type poll option ' + (i + 1) + ' [' + describeDialog() + ']' };
+    }
+    // remove leftover EMPTY rows (MCQ with fewer than 3 options)
+    fields = getPollFields();
+    for (let i = fields.length - 1; i >= options.length; i--) {
+      let rm = null, node = fields[i];
+      for (let up = 0; up < 6 && node && !rm; up++) {
+        node = node.parentElement;
+        rm = node && Array.from(node.querySelectorAll('[role="button"]')).find(x =>
+          isVisible(x) && /remove|delete|clear|close/i.test(x.getAttribute('aria-label') || ''));
+      }
+      if (rm) { fireClick(rm); await sleep(500); } else { log('Could not remove empty option ' + (i + 1)); }
+    }
+    return { ok: true };
+  }
+
+  // Type the poll question into the main composer (Lexical) and VERIFY it stuck
+  async function typePollQuestion(question) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const dlg = getComposerDialog();
+      const box = (dlg && dlg.querySelector('[data-lexical-editor="true"][contenteditable="true"]')) || await findTextBox(6000);
+      if (!box) { await sleep(800); continue; }
+      box.click(); box.focus(); await sleep(300);
+      await insertTextWithFormatting(box, question);
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(900);
+      const cur = (box.innerText || box.textContent || '').replace(/\s+/g, ' ').trim();
+      const probe = question.replace(/\s+/g, ' ').trim().slice(0, 15);
+      if (cur.includes(probe)) { log('Question typed (attempt ' + attempt + ')'); return true; }
+      log('Question not retained, retry ' + attempt + ' — box text: "' + cur.slice(0, 30) + '"');
+      try { document.execCommand('insertText', false, question); } catch (e) {}
+      await sleep(900);
+      const cur2 = (box.innerText || box.textContent || '').replace(/\s+/g, ' ').trim();
+      if (cur2.includes(probe)) { log('Question typed via insertText'); return true; }
+    }
+    return false;
+  }
+
   async function clickPostButton(timeout) {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
@@ -697,28 +900,46 @@ function startPosting(postMessage, imageUrl, imageBase64) {
   (async () => {
     try {
       log('=== Starting: ' + window.location.href);
-      const trigger = await findComposerTrigger(15000);
-      if (!trigger) { window.__skoolystResult = { done: true, success: false, error: 'Write something button not found' }; return; }
-      if (!trigger._alreadyOpen) { trigger.click(); await sleep(3000); }
-
-      const textBox = await findTextBox(12000);
-      if (!textBox) { window.__skoolystResult = { done: true, success: false, error: 'Post editor not found' }; return; }
-
-      textBox.click(); await sleep(400);
-      const ok = await insertTextWithFormatting(textBox, postMessage);
-      if (!ok) { window.__skoolystResult = { done: true, success: false, error: 'Could not type text' }; return; }
-      textBox.dispatchEvent(new Event('input',  { bubbles: true }));
-      textBox.dispatchEvent(new Event('change', { bubbles: true }));
-      await sleep(1000);
-
-      if (imageUrl || imageBase64) {
-        await attachImageViaClipboardPaste(imageUrl, imageBase64, textBox);
-        await sleep(2000);
+      const isPoll = Array.isArray(pollOptions) && pollOptions.length >= 2;
+      if (isPoll) {
+        log('MODE: POLL with ' + pollOptions.length + ' options');
+        const opened = await openPollComposer();
+        if (!opened) { window.__skoolystResult = { done: true, success: false, error: 'Poll button not found (group may not allow polls)' }; return; }
+      } else {
+        const trigger = await findComposerTrigger(15000);
+        if (!trigger) { window.__skoolystResult = { done: true, success: false, error: 'Write something button not found' }; return; }
+        if (!trigger._alreadyOpen) { trigger.click(); await sleep(3000); }
       }
 
-      textBox.click(); textBox.focus();
-      textBox.dispatchEvent(new Event('input', { bubbles: true }));
-      await sleep(800);
+      let textBox = null;
+      if (isPoll) {
+        // 1) options first (modal fully rendered), 2) question last, 3) verify
+        const pr = await fillPollOptions(pollOptions);
+        if (!pr.ok) { window.__skoolystResult = { done: true, success: false, error: pr.error }; return; }
+        await sleep(600);
+        const qok = await typePollQuestion(postMessage);
+        if (!qok) { window.__skoolystResult = { done: true, success: false, error: 'Poll question text not retained [' + describeDialog() + ']' }; return; }
+        await sleep(800);
+      } else {
+        textBox = await findTextBox(12000);
+        if (!textBox) { window.__skoolystResult = { done: true, success: false, error: 'Post editor not found' }; return; }
+
+        textBox.click(); await sleep(400);
+        const ok = await insertTextWithFormatting(textBox, postMessage);
+        if (!ok) { window.__skoolystResult = { done: true, success: false, error: 'Could not type text' }; return; }
+        textBox.dispatchEvent(new Event('input',  { bubbles: true }));
+        textBox.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleep(1000);
+
+        if (imageUrl || imageBase64) {
+          await attachImageViaClipboardPaste(imageUrl, imageBase64, textBox);
+          await sleep(2000);
+        }
+
+        textBox.click(); textBox.focus();
+        textBox.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(800);
+      }
 
       const clicked = await clickPostButton(15000);
       if (!clicked) { window.__skoolystResult = { done: true, success: false, error: 'Post button not found' }; return; }

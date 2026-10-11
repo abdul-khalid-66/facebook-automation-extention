@@ -149,8 +149,10 @@ function switchTab(tabName) {
 function setupPostTab() {
   document.getElementById('postMessage').addEventListener('input', () => {
     postData.message = document.getElementById('postMessage').value;
-    updateCharCount(); savePost();
+    updateCharCount(); updatePollPreview(); savePost();
   });
+  document.getElementById('pollMode').addEventListener('change', updatePollPreview);
+  document.getElementById('pollKeepLabels').addEventListener('change', updatePollPreview);
   document.getElementById('imageUrl').addEventListener('input', (e) => {
     postData.imageUrl = e.target.value; postData.imageBase64 = '';
     document.getElementById('imagePreview').style.display = 'none';
@@ -265,6 +267,8 @@ function normalizeQueuedPost(post) {
     message: post.message || '',
     imageUrl: post.imageUrl || '',
     imageBase64: post.imageBase64 || '',
+    type: post.type === 'poll' ? 'poll' : 'text',
+    pollOptions: Array.isArray(post.pollOptions) ? post.pollOptions : [],
     status: ['pending', 'processing', 'posted'].includes(post.status) ? post.status : 'pending',
     addedAt: post.addedAt || Date.now(),
     startedAt: post.startedAt || null,
@@ -278,18 +282,65 @@ async function syncDraftPost() {
   await savePost();
 }
 
+// ── MCQ → Poll parser ────────────────────────────────────────
+const POLL_MAX_OPTIONS = 10;
+function parseMcqBlock(block, keepLabels) {
+  const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+  const q = [], opts = [];
+  const labelRe  = /^[🔘⚪⚫○●◯•▪\-–*]?\s*\(?([A-Ja-j])[).:]\s+(.+)$/u;
+  const bulletRe = /^[🔘⚪⚫○●◯•▪\-–*]\s*(.+)$/u;
+  for (const line of lines) {
+    let m = line.match(labelRe);
+    if (m) { opts.push(keepLabels ? `${m[1].toUpperCase()}) ${m[2].trim()}` : m[2].trim()); continue; }
+    m = line.match(bulletRe);
+    if (m && (opts.length > 0 || q.length > 0 || line.startsWith('🔘'))) { opts.push(m[1].trim()); continue; }
+    if (opts.length === 0) q.push(line.replace(/^[❓❔?]\s*/u, '').replace(/^Q(?:uestion)?\s*\d*\s*[.:)\-]\s*/i, '').trim());
+    // lines after options (e.g. "Answer: B") are ignored on purpose
+  }
+  const question = q.join('\n').trim();
+  if (!question) return { error: 'Question text nahi mila' };
+  if (opts.length < 2) return { error: 'Kam az kam 2 options chahiye' };
+  if (opts.length > POLL_MAX_OPTIONS) return { error: `Max ${POLL_MAX_OPTIONS} options allowed` };
+  return { question, options: opts };
+}
+
+function buildPostsFromDraft(text, { single = false } = {}) {
+  const pollOn = document.getElementById('pollMode')?.checked;
+  if (!pollOn) {
+    return { posts: [normalizeQueuedPost({ message: text, imageUrl: postData.imageUrl || '', imageBase64: postData.imageBase64 || '', status: 'pending', addedAt: Date.now() })], errors: [] };
+  }
+  const keepLabels = document.getElementById('pollKeepLabels')?.checked !== false;
+  let blocks = text.split(/\n\s*\n+/).map(s => s.trim()).filter(Boolean);
+  if (single) blocks = blocks.slice(0, 1);
+  const posts = [], errors = [];
+  blocks.forEach((blk, i) => {
+    const r = parseMcqBlock(blk, keepLabels);
+    if (r.error) { errors.push(`MCQ #${i + 1}: ${r.error}`); return; }
+    posts.push(normalizeQueuedPost({ type: 'poll', message: r.question, pollOptions: r.options, status: 'pending', addedAt: Date.now() + i }));
+  });
+  return { posts, errors };
+}
+
+function updatePollPreview() {
+  const on = document.getElementById('pollMode')?.checked;
+  document.getElementById('pollHelp').style.display = on ? 'block' : 'none';
+  const box = document.getElementById('pollPreview');
+  if (!on) { box.style.display = 'none'; return; }
+  const txt = document.getElementById('postMessage').value.trim();
+  if (!txt) { box.style.display = 'none'; return; }
+  const { posts, errors } = buildPostsFromDraft(txt);
+  box.style.display = 'block';
+  box.innerHTML = `📊 ${posts.length} poll(s) ready` + (errors.length ? ` · <span style="color:#fa3e3e">${escHtml(errors.join(' | '))}</span>` : '');
+}
+
 async function ensureDraftPostQueued() {
   const message = document.getElementById('postMessage').value.trim();
   if ((postData.posts || []).some(p => p.status === 'pending')) return;
   if (!message) return;
   postData.posts = postData.posts || [];
-  postData.posts.push(normalizeQueuedPost({
-    message,
-    imageUrl: postData.imageUrl || '',
-    imageBase64: postData.imageBase64 || '',
-    status: 'pending',
-    addedAt: Date.now()
-  }));
+  const built = buildPostsFromDraft(message);
+  if (built.errors.length) { alert('Poll format error:\n' + built.errors.join('\n')); return; }
+  postData.posts.push(...built.posts);
   await savePost();
   renderPostQueue();
 }
@@ -303,24 +354,27 @@ async function savePostQueueDraft() {
   if (!message) { alert('Post message likhna zaroori hai!'); return; }
   postData.posts = postData.posts || [];
 
+  const built = buildPostsFromDraft(message, { single: !!editingPostId });
+  if (built.errors.length) {
+    alert('Poll format error:\n' + built.errors.join('\n') + '\n\nFormat: ❓ Question + 🔘 A) option lines');
+    if (built.posts.length === 0) return;
+  }
+
   if (editingPostId) {
     const post = postData.posts.find(p => p.id === editingPostId);
     if (!post) { cancelPostEdit(); return; }
-    post.message = message;
-    post.imageUrl = postData.imageUrl || '';
-    post.imageBase64 = postData.imageBase64 || '';
+    const src = built.posts[0];
+    post.message = src.message;
+    post.type = src.type;
+    post.pollOptions = src.pollOptions;
+    post.imageUrl = src.imageUrl;
+    post.imageBase64 = src.imageBase64;
     if (post.status === 'posted') {
       post.status = 'pending';
       post.postedAt = null;
     }
   } else {
-    postData.posts.push(normalizeQueuedPost({
-      message,
-      imageUrl: postData.imageUrl || '',
-      imageBase64: postData.imageBase64 || '',
-      status: 'pending',
-      addedAt: Date.now()
-    }));
+    postData.posts.push(...built.posts);
   }
 
   clearPostDraftFields();
@@ -405,8 +459,13 @@ function loadPostIntoEditor(post) {
   postData.message = post.message || '';
   postData.imageUrl = post.imageUrl || '';
   postData.imageBase64 = post.imageBase64 || '';
-  document.getElementById('postMessage').value = postData.message;
+  const isPollPost = post.type === 'poll';
+  document.getElementById('pollMode').checked = isPollPost;
+  document.getElementById('postMessage').value = isPollPost
+    ? `❓ ${post.message}\n` + (post.pollOptions || []).map(o => `🔘 ${o}`).join('\n')
+    : postData.message;
   document.getElementById('imageUrl').value = postData.imageUrl;
+  updatePollPreview();
   if (postData.imageBase64) {
     document.getElementById('imagePreview').src = postData.imageBase64;
     document.getElementById('imagePreview').style.display = 'block';
@@ -430,8 +489,9 @@ function renderPostQueue() {
     <div class="post-queue-item">
       <div class="flex gap-2" style="justify-content:space-between;align-items:flex-start">
         <div style="min-width:0;flex:1">
-          <div class="post-queue-message">Order #${index + 1}: ${escHtml(post.message)}</div>
-          <div class="text-sm mt-2">${post.imageBase64 || post.imageUrl ? '🖼️ Image attached' : 'No image'}${post.postedAt ? ` · Posted: ${formatDateTime(post.postedAt)}` : ''}</div>
+          <div class="post-queue-message">Order #${index + 1}: ${post.type === 'poll' ? '📊 ' : ''}${escHtml(post.message)}</div>
+          ${post.type === 'poll' ? `<div class="text-sm mt-2">${(post.pollOptions || []).map(o => '🔘 ' + escHtml(o)).join('<br>')}</div>` : ''}
+          <div class="text-sm mt-2">${post.type === 'poll' ? `📊 Poll · ${(post.pollOptions || []).length} options` : (post.imageBase64 || post.imageUrl ? '🖼️ Image attached' : 'No image')}${post.postedAt ? ` · Posted: ${formatDateTime(post.postedAt)}` : ''}</div>
         </div>
         <span class="status-badge post-status-${post.status}">${post.status === 'posted' ? 'Posted successfully' : post.status}</span>
       </div>
@@ -514,6 +574,8 @@ async function startPosting() {
     message:     nextPost.message,
     imageUrl:    nextPost.imageUrl    || '',
     imageBase64: nextPost.imageBase64 || '',
+    postType:    nextPost.type === 'poll' ? 'poll' : 'text',
+    pollOptions: nextPost.pollOptions || [],
     delay:       postData.delay       || 10,
     startedAt:   Date.now(),
     scheduledRun: false,
