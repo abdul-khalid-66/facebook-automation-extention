@@ -213,6 +213,7 @@ async function startSessionInBackground(session) {
   const failed = session.groups.filter(g => g.status === 'failed').length;
 
   const sourceListUpdated = await updateSourceListUrlStatuses(session);
+  // await updatePostQueueAfterSession(session, failed);
 
   // Save to history
   const historyRecord = {
@@ -242,6 +243,10 @@ async function startSessionInBackground(session) {
 
   notifyPopup({ action: 'sessionComplete', done, failed, session, historyRecord });
   console.log(`[Skoolyst BG] Session complete: ${done} done, ${failed} failed`);
+
+  // if (session.autoPostQueue && failed === 0 && sourceListUpdated) {
+  //   await startNextQueuedPost(session);
+  // }
 
   if (session.autoPostQueue && sourceListUpdated) {
     await continueQueuedFlow(session, failed);
@@ -293,12 +298,14 @@ async function markQueuedPostProcessing(postId) {
   await chrome.storage.local.set({ [SK.POST]: postData });
 }
 
-async function updatePostQueueAfterSession(session, failed, allListsDone) {
+// async function updatePostQueueAfterSession(session, failed) {
+  async function updatePostQueueAfterSession(session, failed, allListsDone) {
   if (!session.postId) return;
   const data = await chrome.storage.local.get(SK.POST);
   const postData = normalizePostData(data[SK.POST]);
   const post = postData.posts.find(p => p.id === session.postId);
   if (!post) return;
+  // if (failed === 0) {
   if (failed === 0 && allListsDone) {
     post.status = 'posted';
     post.postedAt = Date.now();
@@ -331,6 +338,11 @@ async function updateSourceListUrlStatuses(session) {
   return true;
 }
 
+// ── Queue continuation ──────────────────────────────────────────
+// Desired flow: Post #1 runs across List 1 -> List 2 -> List 3 (in order).
+// Only once EVERY list has been used for Post #1 do we roll over to
+// Post #2, reset every list's groups back to "pending", and repeat the
+// same List 1 -> List 2 -> List 3 sweep for Post #2, and so on.
 async function continueQueuedFlow(session, failed) {
   if (failed > 0) {
     await updatePostQueueAfterSession(session, failed, false);
@@ -344,54 +356,32 @@ async function continueQueuedFlow(session, failed) {
 
   const remainingLists = (data[SK.LISTS] || []).filter(l => getPendingGroups(l).length > 0);
   if (remainingLists.length > 0) {
+    // Same post continues on to the next list that still has pending groups.
     currentPost.status = 'processing';
     await chrome.storage.local.set({ [SK.POST]: postData });
-    await startQueuedPostForList(session, currentPost, remainingLists[0], postData);
+    await startQueuedPostForList(currentPost, remainingLists[0], postData, session);
     return;
   }
 
+  // Every list has now been posted to with the current post — mark it done
+  // and move the whole queue on to the next pending post, starting again
+  // from the first list.
   await updatePostQueueAfterSession(session, 0, true);
-  await resetAllListsForNextPost();
-  await startNextQueuedPost(session);
+  await advanceToNextQueuedPost(session);
 }
 
-async function resetAllListsForNextPost() {
-  const data = await chrome.storage.local.get(SK.LISTS);
-  const lists = data[SK.LISTS] || [];
-  lists.forEach(list => {
-    (list.groups || []).forEach(g => {
-      g.status = 'pending';
-      g.lastError = null;
-    });
-  });
-  await chrome.storage.local.set({ [SK.LISTS]: lists });
-}
-
-async function startNextQueuedPost(previousSession) {
-  const data = await chrome.storage.local.get([SK.POST, SK.LISTS]);
-  const postData = normalizePostData(data[SK.POST]);
-  const nextPost = getNextPendingPost(postData);
-  if (!nextPost) return;
-  const list = (data[SK.LISTS] || []).find(l => getPendingGroups(l).length > 0);
-  if (!list) return;
-
-  nextPost.status = 'processing';
-  nextPost.startedAt = Date.now();
-  await chrome.storage.local.set({ [SK.POST]: postData });
-  await startQueuedPostForList(previousSession, nextPost, list, postData);
-}
-
-async function startQueuedPostForList(previousSession, post, list, postData) {
-  const pendingGroups = getPendingGroups(list || {});
-  if (!list || pendingGroups.length === 0) return;
+// Start `post` on `list`, reusing timing/context from `previousSession`.
+async function startQueuedPostForList(post, list, postData, previousSession) {
+  const pendingGroups = getPendingGroups(list);
+  if (pendingGroups.length === 0) return;
 
   const nextSession = {
     id: Date.now(),
     listName: list.name,
-    listIndex: previousSession.listIndex,
+    listIndex: (await chrome.storage.local.get(SK.LISTS))[SK.LISTS]?.findIndex(l => l.id === list.id) ?? null,
     listId: list.id,
     postId: post.id,
-    postIndex: post.postIndex ?? postData.posts.findIndex(p => p.id === post.id),
+    postIndex: postData.posts.findIndex(p => p.id === post.id),
     groups: pendingGroups.map(g => ({
       name: g.name,
       url: g.url,
@@ -412,6 +402,37 @@ async function startQueuedPostForList(previousSession, post, list, postData) {
   await chrome.storage.local.set({ [SK.SESSION]: nextSession });
   notifyPopup({ action: 'queuedRunStarted', listName: list.name, postIndex: nextSession.postIndex });
   await startSessionInBackground(nextSession);
+}
+
+// Reset every list's groups back to pending, then kick off the next
+// pending post (if any) starting from the first list again.
+async function advanceToNextQueuedPost(previousSession) {
+  const data = await chrome.storage.local.get([SK.POST, SK.LISTS]);
+  const postData = normalizePostData(data[SK.POST]);
+  const lists = data[SK.LISTS] || [];
+
+  const nextPost = getNextPendingPost(postData);
+  if (!nextPost) {
+    console.log('[Skoolyst BG] All queued posts have been completed.');
+    notifyPopup({ action: 'postQueueComplete' });
+    return;
+  }
+  if (lists.length === 0) return;
+
+  // Reset ALL lists so the next post sweeps through every group again.
+  lists.forEach(l => {
+    (l.groups || []).forEach(g => {
+      g.status = 'pending';
+      g.lastError = null;
+    });
+  });
+  await chrome.storage.local.set({ [SK.LISTS]: lists });
+
+  nextPost.status = 'processing';
+  nextPost.startedAt = Date.now();
+  await chrome.storage.local.set({ [SK.POST]: postData });
+
+  await startQueuedPostForList(nextPost, lists[0], postData, previousSession);
 }
 
 
