@@ -10,7 +10,7 @@
 
 const SK = {
   LISTS:     'sk_lists',       // Array of group lists
-  SCHEDULE:  'sk_schedule',    // { enabled, hour, minute, nextRunAt, currentListIndex }
+  SCHEDULE:  'sk_schedule',    // { enabled, hour, minute, nextRunAt, currentListIndex, nextListId }
   SESSION:   'sk_session',     // Active session
   HISTORY:   'sk_history',     // Array of completed session records
   POST:      'sk_post',        // { message, imageUrl, imageBase64, delay }
@@ -64,20 +64,35 @@ async function checkAndRunSchedule() {
   await runNextList(lists, schedule, { ...post, delay: data[SK.POST]?.delay || 10 });
 }
 
+// ── Rotation pointer helper (ID based) ───────────────────────
+// Starts at schedule.nextListId (falls back to the first list) and walks forward,
+// wrapping around, until it finds a list that still has pending groups.
+function getNextRotationList(lists, schedule) {
+  const n = lists.length;
+  if (n === 0) return null;
+  let start = lists.findIndex(l => l.id === (schedule && schedule.nextListId));
+  if (start === -1) start = 0;
+  for (let k = 0; k < n; k++) {
+    const i = (start + k) % n;
+    if (getPendingGroups(lists[i]).length > 0) return { list: lists[i], index: i };
+  }
+  return null;
+}
+
 // ── Run the next list in rotation ────────────────────────────
 async function runNextList(lists, schedule, post) {
-  const listIndex = schedule.currentListIndex || 0;
-  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
-  if (validLists.length === 0) {
+  // Pointer is tracked by list ID (schedule.nextListId), NOT by an index into a
+  // filtered array — completed lists drop out of the "pending" filter, which
+  // used to shift the index and make rotation skip lists.
+  const picked = getNextRotationList(lists, schedule);
+  if (!picked) {
     console.log('[Skoolyst BG] No lists with groups found');
     return;
   }
+  const actualIndex = picked.index;          // position in the FULL lists array
+  const chosenList  = picked.list;
 
-  // Wrap index
-  const actualIndex = listIndex % validLists.length;
-  const chosenList  = validLists[actualIndex];
-
-  console.log(`[Skoolyst BG] Running list ${actualIndex + 1}/${validLists.length}: "${chosenList.name}"`);
+  console.log(`[Skoolyst BG] Running list ${actualIndex + 1}/${lists.length}: "${chosenList.name}"`);
 
   const pendingGroups = getPendingGroups(chosenList);
 
@@ -111,8 +126,10 @@ async function runNextList(lists, schedule, post) {
   await chrome.storage.local.set({ [SK.SESSION]: session });
 
   // Advance pointer for next time
-  const nextIndex = (actualIndex + 1) % validLists.length;
-  const wasLastList = nextIndex === 0;
+  // Next pointer = the list right after the chosen one in the FULL order.
+  // (If it has no pending groups, getNextRotationList skips forward to the next one that has.)
+  const nextIndex   = (actualIndex + 1) % lists.length;
+  const wasLastList = actualIndex === lists.length - 1;
 
   // Calculate next run time: same time next day from NOW
   const nextRunAt = Date.now() + 24 * 60 * 60 * 1000;
@@ -120,6 +137,7 @@ async function runNextList(lists, schedule, post) {
   const updatedSchedule = {
     ...schedule,
     currentListIndex: nextIndex,
+    nextListId:       lists[nextIndex].id,
     lastRunAt:        Date.now(),
     nextRunAt:        nextRunAt,
     lastListName:     chosenList.name,

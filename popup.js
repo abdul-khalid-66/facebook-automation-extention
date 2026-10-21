@@ -190,13 +190,37 @@ function setupPostTab() {
   document.getElementById('postQueueList').addEventListener('click', handlePostQueueClick);
 }
 
+// ── Rotation pointer helper (ID based; mirrors background.js) ─
+function getNextRotationList(fromListId) {
+  const n = lists.length;
+  if (n === 0) return null;
+  let start = lists.findIndex(l => l.id === (fromListId !== undefined ? fromListId : schedule.nextListId));
+  if (start === -1) start = 0;
+  for (let k = 0; k < n; k++) {
+    const i = (start + k) % n;
+    if (getPendingGroups(lists[i]).length > 0) return { list: lists[i], index: i };
+  }
+  return null;
+}
+
+// The list that comes after `index` (in full order) that still has pending groups
+function getFollowingRotationList(index) {
+  const n = lists.length;
+  for (let k = 1; k < n; k++) {
+    const i = (index + k) % n;
+    if (getPendingGroups(lists[i]).length > 0) return { list: lists[i], index: i };
+  }
+  return null;
+}
+
 function renderPostTab() {
   // Populate list selector
   const sel = document.getElementById('selectListForPost');
   const prev = sel.value;
   sel.innerHTML = '<option value="">-- List select karo --</option>';
+  const curPick = getNextRotationList();
   lists.forEach((l, i) => {
-    const isCurrent = i === (schedule.currentListIndex || 0) % (lists.length || 1);
+    const isCurrent = !!curPick && curPick.index === i;
     const opt = document.createElement('option');
     opt.value = i;
     opt.textContent = `${l.name} (${getPendingGroups(l).length} pending / ${l.groups.length} total)${isCurrent ? ' ← Next' : ''}`;
@@ -225,8 +249,7 @@ function updateNextListPreview() {
   if (validLists.length === 0) {
     el.textContent = 'Koi list nahi — pehle Lists tab mein groups add karo'; return;
   }
-  const idx = (schedule.currentListIndex || 0) % validLists.length;
-  const next = validLists[idx];
+  const next = getNextRotationList().list;
   const nextRunAt = schedule.nextRunAt;
   const timeStr = nextRunAt ? formatDateTime(nextRunAt) : 'Abhi chalao';
   el.innerHTML = `<strong>${next.name}</strong> (${getPendingGroups(next).length} pending groups) — Scheduled: ${timeStr}`;
@@ -608,9 +631,8 @@ async function runNextListNow() {
   if (lists.filter(l => getPendingGroups(l).length > 0).length === 0) {
     alert('Koi list nahi. Lists tab mein groups add karo.'); return;
   }
-  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
-  const idx = (schedule.currentListIndex || 0) % validLists.length;
-  if (!confirm(`Abhi "${validLists[idx].name}" (${getPendingGroups(validLists[idx]).length} pending groups) run karein?\n\nRotation pointer next list par move ho jayega.`)) return;
+  const nextPick = getNextRotationList().list;
+  if (!confirm(`Abhi "${nextPick.name}" (${getPendingGroups(nextPick).length} pending groups) run karein?\n\nRotation pointer next list par move ho jayega.`)) return;
 
   const resp = await chrome.runtime.sendMessage({ action: 'runListNow' });
   if (resp && !resp.ok) { alert('Error: ' + resp.error); return; }
@@ -781,15 +803,13 @@ function renderLists() {
     return;
   }
 
-  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
-  const currentIdx = validLists.length > 0
-    ? (schedule.currentListIndex || 0) % validLists.length
-    : -1;
+  const curPick  = getNextRotationList();
+  const nextPick = curPick ? getFollowingRotationList(curPick.index) : null;
+  const validCount = lists.filter(l => getPendingGroups(l).length > 0).length;
 
   container.innerHTML = lists.map((l, listIdx) => {
-    const validIdx  = validLists.findIndex(vl => vl.id === l.id);
-    const isCurrent = validIdx !== -1 && validIdx === currentIdx;
-    const isNext    = validIdx !== -1 && validIdx === ((currentIdx + 1) % validLists.length) && validLists.length > 1;
+    const isCurrent = !!curPick && curPick.list.id === l.id;
+    const isNext    = !!nextPick && nextPick.list.id === l.id && validCount > 1;
     const slotsFull = l.groups.length >= MAX_GROUPS_PER_LIST;
     const lid       = l.id;
 
@@ -1022,7 +1042,8 @@ async function saveScheduleSettings() {
     hour,
     minute,
     nextRunAt,
-    currentListIndex: schedule.currentListIndex || 0
+    currentListIndex: schedule.currentListIndex || 0,
+    nextListId: schedule.nextListId
   };
   await saveSchedule();
   // Tell background to reset alarm
@@ -1035,27 +1056,26 @@ async function saveScheduleSettings() {
 }
 
 function getNextListName() {
-  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
-  if (validLists.length === 0) return 'No lists';
-  const idx = (schedule.currentListIndex || 0) % validLists.length;
-  return validLists[idx].name;
+  const pick = getNextRotationList();
+  return pick ? pick.list.name : 'No lists';
 }
 
 async function resetPointer() {
   if (!confirm('Rotation pointer reset karein? Wapis pehli list se shuru hoga.')) return;
   schedule.currentListIndex = 0;
+  schedule.nextListId = lists.length ? lists[0].id : undefined;
   await saveSchedule();
   renderScheduleTab();
   renderPostTab();
 }
 
 async function skipList() {
-  const validLists = lists.filter(l => getPendingGroups(l).length > 0);
-  if (validLists.length === 0) { alert('Koi list nahi.'); return; }
-  const cur = (schedule.currentListIndex || 0) % validLists.length;
-  const next = (cur + 1) % validLists.length;
-  if (!confirm(`"${validLists[cur].name}" skip karein?\nNext: "${validLists[next].name}"`)) return;
-  schedule.currentListIndex = next;
+  const cur = getNextRotationList();
+  if (!cur) { alert('Koi list nahi.'); return; }
+  const nxt = getFollowingRotationList(cur.index) || cur;
+  if (!confirm(`\"${cur.list.name}\" skip karein?\nNext: \"${nxt.list.name}\"`)) return;
+  schedule.currentListIndex = nxt.index;
+  schedule.nextListId = nxt.list.id;
   await saveSchedule();
   renderScheduleTab();
   renderPostTab();
@@ -1078,8 +1098,9 @@ function renderScheduleTab() {
     document.getElementById('nextRunTime').textContent  = 'Lists tab mein groups add karo';
     document.getElementById('rotationPointerInfo').textContent = 'No lists configured';
   } else {
-    const idx   = (schedule.currentListIndex || 0) % total;
-    const next  = validLists[idx];
+    const pick  = getNextRotationList();
+    const idx   = pick.index;
+    const next  = pick.list;
     document.getElementById('nextListName').textContent = next.name + ` (${getPendingGroups(next).length} pending groups)`;
     document.getElementById('nextRunTime').textContent  = schedule.enabled && schedule.nextRunAt
       ? `Next run: ${formatDateTime(schedule.nextRunAt)}`
