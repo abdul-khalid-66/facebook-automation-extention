@@ -51,7 +51,7 @@ function listenToBackground() {
         `✅ Complete! ${message.done} done, ${message.failed} failed.`;
       renderStatus();
       loadHistory().then(renderHistory);
-      refreshListsFromStorage().then(() => { renderLists(); renderPostTab(); renderScheduleTab(); });
+      refreshListsFromStorage().then(() => loadPostData()).then(() => { renderLists(); renderPostTab(); renderScheduleTab(); renderPostQueue(); });
       const listLabel = session.listName ? `\nList: "${session.listName}"` : '';
       alert(`✅ Posting Complete!${listLabel}\n\nSuccessful: ${message.done}\nFailed: ${message.failed}\n\nHistory tab mein full record dekho.`);
     }
@@ -191,26 +191,38 @@ function setupPostTab() {
 }
 
 // ── Rotation pointer helper (ID based; mirrors background.js) ─
-function getNextRotationList(fromListId) {
+function postDoneOnList(post, listId) {
+  return !!(post && post.postedLists && post.postedLists[listId]);
+}
+
+// Next list for the CURRENT post: skips lists this post was already posted to
+function getNextRotationList(fromListId, post) {
   const n = lists.length;
   if (n === 0) return null;
+  const cur = post === undefined ? getNextPendingPost() : post;
   let start = lists.findIndex(l => l.id === (fromListId !== undefined ? fromListId : schedule.nextListId));
   if (start === -1) start = 0;
   for (let k = 0; k < n; k++) {
     const i = (start + k) % n;
-    if (getPendingGroups(lists[i]).length > 0) return { list: lists[i], index: i };
+    if (getPendingGroups(lists[i]).length > 0 && !postDoneOnList(cur, lists[i].id)) return { list: lists[i], index: i };
   }
   return null;
 }
 
-// The list that comes after `index` (in full order) that still has pending groups
+// The list that comes after `index` (in full order) which is still eligible
 function getFollowingRotationList(index) {
   const n = lists.length;
+  const cur = getNextPendingPost();
   for (let k = 1; k < n; k++) {
     const i = (index + k) % n;
-    if (getPendingGroups(lists[i]).length > 0) return { list: lists[i], index: i };
+    if (getPendingGroups(lists[i]).length > 0 && !postDoneOnList(cur, lists[i].id)) return { list: lists[i], index: i };
   }
   return null;
+}
+
+// "Group 1, Group 2" for lists this post is already posted to
+function postedListsLabel(post) {
+  return Object.values(post.postedLists || {}).map(x => x.listName).filter(Boolean).join(', ');
 }
 
 function renderPostTab() {
@@ -223,7 +235,7 @@ function renderPostTab() {
     const isCurrent = !!curPick && curPick.index === i;
     const opt = document.createElement('option');
     opt.value = i;
-    opt.textContent = `${l.name} (${getPendingGroups(l).length} pending / ${l.groups.length} total)${isCurrent ? ' ← Next' : ''}`;
+    opt.textContent = `${l.name} (${getPendingGroups(l).length} pending / ${l.groups.length} total)${isCurrent ? ' ← Next' : ''}${postDoneOnList(getNextPendingPost(), l.id) ? ' ✔ is post par ho chuki' : ''}`;
     sel.appendChild(opt);
   });
   if (prev !== '') sel.value = prev;
@@ -249,7 +261,9 @@ function updateNextListPreview() {
   if (validLists.length === 0) {
     el.textContent = 'Koi list nahi — pehle Lists tab mein groups add karo'; return;
   }
-  const next = getNextRotationList().list;
+  const pickN = getNextRotationList();
+  if (!pickN) { el.textContent = 'Current post har eligible list par ho chuki hai — agli run par next post shuru hogi'; return; }
+  const next = pickN.list;
   const nextRunAt = schedule.nextRunAt;
   const timeStr = nextRunAt ? formatDateTime(nextRunAt) : 'Abhi chalao';
   el.innerHTML = `<strong>${next.name}</strong> (${getPendingGroups(next).length} pending groups) — Scheduled: ${timeStr}`;
@@ -295,7 +309,9 @@ function normalizeQueuedPost(post) {
     status: ['pending', 'processing', 'posted'].includes(post.status) ? post.status : 'pending',
     addedAt: post.addedAt || Date.now(),
     startedAt: post.startedAt || null,
-    postedAt: post.postedAt || null
+    postedAt: post.postedAt || null,
+    // { [listId]: { listName, at, done, failed, count } } — lists this post has already been posted to
+    postedLists: (post.postedLists && typeof post.postedLists === 'object') ? post.postedLists : {}
   };
 }
 
@@ -358,7 +374,7 @@ function updatePollPreview() {
 
 async function ensureDraftPostQueued() {
   const message = document.getElementById('postMessage').value.trim();
-  if ((postData.posts || []).some(p => p.status === 'pending')) return;
+  if ((postData.posts || []).some(p => p.status !== 'posted')) return;
   if (!message) return;
   postData.posts = postData.posts || [];
   const built = buildPostsFromDraft(message);
@@ -369,7 +385,7 @@ async function ensureDraftPostQueued() {
 }
 
 function getNextPendingPost() {
-  return (postData.posts || []).find(p => p.status === 'pending');
+  return (postData.posts || []).find(p => p.status !== 'posted');
 }
 
 async function savePostQueueDraft() {
@@ -395,6 +411,7 @@ async function savePostQueueDraft() {
     if (post.status === 'posted') {
       post.status = 'pending';
       post.postedAt = null;
+      post.postedLists = {};
     }
   } else {
     postData.posts.push(...built.posts);
@@ -438,7 +455,7 @@ function cancelPostEdit() {
 
 async function resetPostQueue() {
   if (!confirm('Sab queued posts ko pending kar dein? Posted posts dobara chal sakti hain.')) return;
-  (postData.posts || []).forEach(p => { p.status = 'pending'; p.startedAt = null; p.postedAt = null; });
+  (postData.posts || []).forEach(p => { p.status = 'pending'; p.startedAt = null; p.postedAt = null; p.postedLists = {}; });
   await savePost();
   renderPostQueue();
 }
@@ -464,7 +481,8 @@ async function handlePostQueueClick(e) {
     postData.posts = postData.posts.filter(p => p.id !== id);
   }
   if (btn.dataset.postAction === 'pending') {
-    post.status = 'pending'; post.startedAt = null; post.postedAt = null;
+    if (postedListsLabel(post) && !confirm(`Is post ka record clear ho jayega (abhi par posted: ${postedListsLabel(post)}).\nDubara sab lists par chalegi. Continue?`)) return;
+    post.status = 'pending'; post.startedAt = null; post.postedAt = null; post.postedLists = {};
   }
   await savePost();
   renderPostQueue();
@@ -515,6 +533,7 @@ function renderPostQueue() {
           <div class="post-queue-message">Order #${index + 1}: ${post.type === 'poll' ? '📊 ' : ''}${escHtml(post.message)}</div>
           ${post.type === 'poll' ? `<div class="text-sm mt-2">${(post.pollOptions || []).map(o => '🔘 ' + escHtml(o)).join('<br>')}</div>` : ''}
           <div class="text-sm mt-2">${post.type === 'poll' ? `📊 Poll · ${(post.pollOptions || []).length} options` : (post.imageBase64 || post.imageUrl ? '🖼️ Image attached' : 'No image')}${post.postedAt ? ` · Posted: ${formatDateTime(post.postedAt)}` : ''}</div>
+          ${renderPostLedger(post)}
         </div>
         <span class="status-badge post-status-${post.status}">${post.status === 'posted' ? 'Posted successfully' : post.status}</span>
       </div>
@@ -526,6 +545,16 @@ function renderPostQueue() {
         <button class="btn btn-danger btn-sm" data-post-action="remove" data-post-id="${post.id}">Remove</button>
       </div>
     </div>`).join('');
+}
+
+function renderPostLedger(post) {
+  const done = Object.entries(post.postedLists || {});
+  if (post.status === 'posted' && done.length === 0) return '';
+  const doneIds = new Set(done.map(([id]) => String(id)));
+  const doneHtml = done.map(([, x]) => `✅ ${escHtml(x.listName || 'List')} <span style="color:#65676b">(${x.done}✔${x.failed ? ' ' + x.failed + '✖' : ''} · ${formatDateTime(x.at)})</span>`).join('<br>');
+  const remaining = lists.filter(l => (l.groups || []).length > 0 && !doneIds.has(String(l.id))).map(l => escHtml(l.name));
+  if (!doneHtml && post.status === 'pending') return '';
+  return `<div class="text-sm mt-2" style="line-height:1.5">${doneHtml}${remaining.length && post.status !== 'posted' ? `<br>⏳ Baki: ${remaining.join(', ')}` : ''}</div>`;
 }
 
 // ── Resume session check ──────────────────────────────────────
@@ -571,10 +600,28 @@ async function startPosting() {
     alert('Pehle koi list select karo!'); return;
   }
   const chosenList = lists[selIdx];
-  const pendingGroups = getPendingGroups(chosenList);
   if (chosenList.groups.length === 0) {
     alert(`"${chosenList.name}" mein koi group nahi. Pehle groups add karo.`); return;
   }
+
+  // ⚠️ Same post already posted on this list? Ask before repeating.
+  const prevRun = nextPost.postedLists && nextPost.postedLists[chosenList.id];
+  if (prevRun) {
+    const postNo = postData.posts.findIndex(x => x.id === nextPost.id) + 1;
+    const ok = confirm(
+      `⚠️ Post #${postNo} "${chosenList.name}" par pehle hi ho chuki hai.\n\n` +
+      `Waqt: ${formatDateTime(prevRun.at)}\n` +
+      `Result: ${prevRun.done} done, ${prevRun.failed} failed` +
+      (prevRun.count > 1 ? ` (${prevRun.count} baar post hui)` : '') +
+      `\n\nKya isay dubara post karna hai?\n\nOK = Haan, dubara post karo\nCancel = Nahi`
+    );
+    if (!ok) return;
+    // Re-post means ALL groups of this list again
+    chosenList.groups.forEach(g => { g.status = 'pending'; g.lastError = null; });
+    await saveLists();
+  }
+
+  const pendingGroups = getPendingGroups(chosenList);
   if (pendingGroups.length === 0) {
     alert(`"${chosenList.name}" mein pending groups nahi. Failed URLs approve karo ya statuses reset karo.`); return;
   }
@@ -631,7 +678,16 @@ async function runNextListNow() {
   if (lists.filter(l => getPendingGroups(l).length > 0).length === 0) {
     alert('Koi list nahi. Lists tab mein groups add karo.'); return;
   }
-  const nextPick = getNextRotationList().list;
+  const pickR = getNextRotationList();
+  if (!pickR) {
+    // Nothing eligible locally: let background close the post / start the next one
+    const r = await chrome.runtime.sendMessage({ action: 'runListNow' });
+    if (r && !r.ok) { alert('Error: ' + r.error); return; }
+    isRunning = true; setRunningUI(true); switchTab('status');
+    await loadPostData(); renderPostQueue();
+    return;
+  }
+  const nextPick = pickR.list;
   if (!confirm(`Abhi "${nextPick.name}" (${getPendingGroups(nextPick).length} pending groups) run karein?\n\nRotation pointer next list par move ho jayega.`)) return;
 
   const resp = await chrome.runtime.sendMessage({ action: 'runListNow' });
@@ -1126,8 +1182,9 @@ function renderScheduleTab() {
 
 
 async function refreshListsFromStorage() {
-  const data = await chrome.storage.local.get(SK.LISTS);
+  const data = await chrome.storage.local.get([SK.LISTS, SK.SCHEDULE]);
   lists = data[SK.LISTS] || [];
+  if (data[SK.SCHEDULE]) schedule = data[SK.SCHEDULE];   // pointer is updated by background
 }
 
 // ════════════════════════════════════════════════════════════════
