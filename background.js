@@ -231,6 +231,7 @@ async function startSessionInBackground(session) {
         postType:    session.postType    || 'text',
         pollOptions: session.pollOptions || []
       });
+      g.groupName = (result && result.groupName) || '';
       g.status = (result && result.success) ? 'done' : 'failed';
       if (!result?.success) g.error = result?.error || 'Unknown error';
     } catch (err) {
@@ -268,7 +269,7 @@ async function startSessionInBackground(session) {
     failed,
     scheduledRun: session.scheduledRun || false,
     groups: session.groups.map(g => ({
-      name:   g.name,
+      name:   g.groupName || g.name,
       url:    g.url,
       status: g.status,
       error:  g.error || null
@@ -345,6 +346,7 @@ async function updateSourceListUrlStatuses(session) {
       g.url === resultGroup.url
     );
     if (!source) return;
+    applyGroupNameCheck(source, resultGroup.groupName);
     source.status = resultGroup.status === 'done' ? 'success' : 'rejected';
     source.lastPostedAt = Date.now();
     source.lastError = resultGroup.status === 'failed' ? (resultGroup.error || 'Unknown error') : null;
@@ -414,10 +416,17 @@ async function saveSession(session) { await chrome.storage.local.set({ [SK.SESSI
 // ── Post to one group (tab open → inject → post → close) ─────
 async function handlePostToGroup({ url, message, imageUrl, imageBase64, postType, pollOptions }) {
   let tab = null;
+  let groupName = '';   // real group name read from the opened page
   try {
     tab = await chrome.tabs.create({ url, active: true });
     await waitForTabLoad(tab.id, 35000);
     await sleep(4000);
+
+    // Read the real group name (never blocks posting if it fails)
+    try {
+      const nameRes = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readGroupNameInPage });
+      groupName = (nameRes?.[0]?.result || '').trim();
+    } catch (e) { console.log('[Skoolyst BG] Group name read failed:', e.message); }
 
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -426,14 +435,59 @@ async function handlePostToGroup({ url, message, imageUrl, imageBase64, postType
     });
 
     const result = await pollForResult(tab.id, 90000);
-    return result;
+    return { ...result, groupName };
   } catch (err) {
-    return { success: false, error: err.message };
+    return { success: false, error: err.message, groupName };
   } finally {
     if (tab) {
       await sleep(3000);
       try { await chrome.tabs.remove(tab.id); } catch {}
     }
+  }
+}
+
+// Runs INSIDE the Facebook group page (injected). Returns the group's real name or ''.
+function readGroupNameInPage() {
+  const clean = s => (s || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^\(\d+\+?\)\s*/, '')              // unread counter "(3) "
+    .replace(/\s*[|\-–—]\s*Facebook\s*$/i, '')    // " | Facebook"
+    .trim();
+  const bad = /\blog in\b|log into facebook|sign up|not found|isn.t available|^facebook$|^error$/i;
+  const cands = [];
+  const og = document.querySelector('meta[property="og:title"]');
+  if (og && og.content) cands.push(og.content);
+  cands.push(document.title);
+  document.querySelectorAll('[role="main"] h1, h1').forEach(h => cands.push(h.innerText));
+  for (const c of cands) {
+    const v = clean(c);
+    if (v && v.length <= 150 && !bad.test(v)) return v;
+  }
+  return '';
+}
+
+// ── Group name: save once, then only compare ────────────────────
+function isPlaceholderName(n) { return !n || /^group\s*\d+$/i.test(String(n).trim()); }
+function normName(n) { return String(n || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase(); }
+
+// First time  -> save real name (replace placeholder "Group N").
+// Next times  -> NO replace, only compare: nameCheck 'ok' (same) or 'changed' (different).
+function applyGroupNameCheck(src, seenName) {
+  if (!seenName) return;
+  src.nameCheckedAt = Date.now();
+  if (!src.realName) {
+    src.realName = seenName;
+    if (isPlaceholderName(src.name)) src.name = seenName;
+    src.nameCheck = 'ok';
+    src.lastSeenName = null;
+    return;
+  }
+  if (normName(src.realName) === normName(seenName)) {
+    src.nameCheck = 'ok';
+    src.lastSeenName = null;
+  } else {
+    src.nameCheck = 'changed';
+    src.lastSeenName = seenName;
   }
 }
 

@@ -877,6 +877,7 @@ function renderLists() {
           <div class="group-info">
             <div class="group-name-text">${escHtml(g.name)}</div>
             <div class="group-url-text">${escHtml(g.url)}</div>
+            ${renderNameCheck(g, lid, gi)}
           </div>
           <span class="status-badge url-status-${normalizeGroupStatus(g.status)}">${normalizeGroupStatus(g.status)}</span>
           <div class="flex gap-2" style="flex-shrink:0">
@@ -954,11 +955,33 @@ function setupListsDelegation() {
       case 'rmg':    e.stopPropagation(); removeGroupFromList(lid, gi); break;
       case 'approve': e.stopPropagation(); setGroupUrlStatus(lid, gi, 'pending'); break;
       case 'reject':  e.stopPropagation(); setGroupUrlStatus(lid, gi, 'rejected'); break;
+      case 'acceptname': e.stopPropagation(); acceptNewGroupName(lid, gi); break;
       case 'reseturlstatus': e.stopPropagation(); resetListUrlStatuses(lid); break;
     }
   });
 }
 
+
+function renderNameCheck(g, lid, gi) {
+  if (g.nameCheck === 'changed') {
+    return `<div style="font-size:10px;color:#b45309;margin-top:2px;">⚠️ Name badal gaya: saved "${escHtml(g.realName)}" → ab "${escHtml(g.lastSeenName || '')}"
+      <button class="btn btn-secondary btn-sm" style="padding:1px 6px;font-size:10px" data-action="acceptname" data-lid="${lid}" data-gi="${gi}">Accept new name</button></div>`;
+  }
+  if (g.realName) return `<div style="font-size:10px;color:#42b72a;margin-top:2px;">✔ Name verified</div>`;
+  return '';
+}
+
+async function acceptNewGroupName(listId, groupIndex) {
+  const l = lists.find(x => x.id === listId);
+  const g = l && l.groups[groupIndex];
+  if (!g || !g.lastSeenName) return;
+  g.realName = g.lastSeenName;
+  g.name = g.lastSeenName;
+  g.nameCheck = 'ok';
+  g.lastSeenName = null;
+  await saveLists();
+  renderLists();
+}
 
 function getPendingGroups(list) {
   return (list.groups || []).filter(g => normalizeGroupStatus(g.status) === 'pending');
