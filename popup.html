@@ -399,7 +399,12 @@
 
   <div class="card">
     <div class="card-title">📚 Post Queue <button class="btn btn-secondary btn-sm" id="btnResetPostQueue">Reset Queue</button></div>
-    <div class="text-sm">Posts run in order. Jab post #1 all groups mein successful ho jaye, extension group 1 se post #2 automatically start karega.</div>
+    <div class="text-sm">Har run mein ek list chalti hai. Post #1 jab har list par ho jaye tab post #2 List 1 se shuru hoti hai. Same post same list par dobara chalne se pehle warning aati hai.</div>
+    <div class="flex gap-2" style="margin-top:8px;">
+      <button class="btn btn-secondary btn-sm" id="btnExportPosts">⬇ Export Posts</button>
+      <button class="btn btn-secondary btn-sm" id="btnImportPosts">⬆ Import Posts</button>
+    </div>
+    <input type="file" id="importPostsFile" accept=".json,application/json" style="display:none" />
     <div id="postQueueList"></div>
   </div>
 

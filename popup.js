@@ -187,6 +187,9 @@ function setupPostTab() {
   document.getElementById('btnClearPostImage').addEventListener('click', clearPostImageDraft);
   document.getElementById('btnCancelPostEdit').addEventListener('click', cancelPostEdit);
   document.getElementById('btnResetPostQueue').addEventListener('click', resetPostQueue);
+  document.getElementById('btnExportPosts').addEventListener('click', exportPosts);
+  document.getElementById('btnImportPosts').addEventListener('click', () => document.getElementById('importPostsFile').click());
+  document.getElementById('importPostsFile').addEventListener('change', importPosts);
   document.getElementById('postQueueList').addEventListener('click', handlePostQueueClick);
 }
 
@@ -451,6 +454,102 @@ async function clearPostImageDraft() {
 
 function cancelPostEdit() {
   clearPostDraftFields();
+}
+
+// ── Export / Import posts (text only) ────────────────────────
+// File format: { app, type:"posts", version, exportedAt, posts:[{ message, type, pollOptions, imageUrl }] }
+// Images are NOT exported (set them per post inside the extension after import).
+const POSTS_FILE_MAX = 500;
+
+function exportPosts() {
+  const posts = postData.posts || [];
+  if (posts.length === 0) { alert('Queue mein koi post nahi. Pehle posts add karo.'); return; }
+  const payload = {
+    app: 'skoolyst-fb-groups-poster',
+    type: 'posts',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    posts: posts.map(p => ({
+      message: p.message || '',
+      type: p.type === 'poll' ? 'poll' : 'text',
+      pollOptions: p.type === 'poll' ? (p.pollOptions || []) : [],
+      imageUrl: p.imageUrl || ''
+    }))
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = `skoolyst-posts-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Accepts: { posts:[...] }, [ {message,...} ], or [ "text", ... ]. Returns { posts, invalid }.
+function parseImportedPosts(json) {
+  const arr = Array.isArray(json) ? json : (json && Array.isArray(json.posts) ? json.posts : null);
+  if (!arr) return null;
+  const posts = []; let invalid = 0;
+  arr.slice(0, POSTS_FILE_MAX).forEach(item => {
+    const o = typeof item === 'string' ? { message: item } : (item || {});
+    const message = String(o.message || '').trim();
+    if (!message) { invalid++; return; }
+    const opts = (Array.isArray(o.pollOptions) ? o.pollOptions : [])
+      .map(x => String(x || '').trim()).filter(Boolean).slice(0, POLL_MAX_OPTIONS);
+    const isPoll = o.type === 'poll' && opts.length >= 2;
+    posts.push({
+      message,
+      type: isPoll ? 'poll' : 'text',
+      pollOptions: isPoll ? opts : [],
+      imageUrl: String(o.imageUrl || '').trim()
+    });
+  });
+  return { posts, invalid };
+}
+
+function importPosts(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async (ev) => {
+    try {
+      const parsed = parseImportedPosts(JSON.parse(ev.target.result));
+      if (!parsed) { alert('Invalid file: "posts" array nahi mili.'); return; }
+      if (parsed.posts.length === 0) { alert('File mein koi valid post nahi mili (message khali hai).'); return; }
+
+      postData.posts = postData.posts || [];
+      let mode = 'add';
+      if (postData.posts.length > 0) {
+        const ans = prompt(
+          `Queue mein ${postData.posts.length} post(s) hain, file mein ${parsed.posts.length} hain.\n\n` +
+          `"add" = purani queue ke baad add karo (same message wali skip hongi)\n` +
+          `"replace" = purani queue hata kar sirf file wali rakho (posted progress reset)\n\n` +
+          `Type karo: add ya replace`, 'add');
+        if (ans === null) return;
+        mode = ans.trim().toLowerCase();
+        if (mode !== 'add' && mode !== 'replace') { alert('"add" ya "replace" likhna zaroori hai.'); return; }
+      }
+
+      const norm = s => String(s || '').replace(/\s+/g, ' ').trim();
+      let skipped = 0;
+      let toAdd = parsed.posts;
+      if (mode === 'replace') {
+        postData.posts = [];
+        editingPostId = null;
+      } else {
+        const existing = new Set(postData.posts.map(p => norm(p.message)));
+        toAdd = parsed.posts.filter(p => { const dup = existing.has(norm(p.message)); if (dup) skipped++; return !dup; });
+      }
+      toAdd.forEach((p, i) => postData.posts.push(normalizeQueuedPost({
+        ...p, id: Math.floor(Date.now() + i + Math.random() * 1000), status: 'pending', addedAt: Date.now()
+      })));
+      await savePost();
+      renderPostQueue();
+      renderPostTab();
+      alert(`${toAdd.length} post(s) import ho gayi.` + (skipped ? `\n${skipped} duplicate skip hui.` : '') + (parsed.invalid ? `\n${parsed.invalid} invalid (khali message) skip hui.` : ''));
+    } catch { alert('JSON parse error: file sahi format mein nahi.'); }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
 }
 
 async function resetPostQueue() {
