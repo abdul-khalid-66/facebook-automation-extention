@@ -447,18 +447,33 @@ async function handlePostToGroup({ url, message, imageUrl, imageBase64, postType
 }
 
 // Runs INSIDE the Facebook group page (injected). Returns the group's real name or ''.
+// Order: (1) the <h1> in the group header (the one next to the "N members" link),
+//        (2) og:title, (3) document.title, (4) any other <h1>.
 function readGroupNameInPage() {
+  const txt = el => (el && (el.innerText || el.textContent)) || '';
   const clean = s => (s || '')
     .replace(/\s+/g, ' ')
     .replace(/^\(\d+\+?\)\s*/, '')              // unread counter "(3) "
     .replace(/\s*[|\-–—]\s*Facebook\s*$/i, '')    // " | Facebook"
     .trim();
-  const bad = /\blog in\b|log into facebook|sign up|not found|isn.t available|^facebook$|^error$/i;
+  const bad = /\blog in\b|log into facebook|sign up|not found|isn.t available|^facebook$|^error$|^notifications$/i;
   const cands = [];
+
+  // (1) header h1: walk up from the "members" link until an ancestor contains an h1
+  const members = document.querySelector('a[href*="/groups/"][href*="/members"]');
+  let node = members;
+  for (let i = 0; node && i < 10; i++) {
+    node = node.parentElement;
+    const h = node && node.querySelector('h1');
+    if (h) { cands.push(txt(h)); break; }
+  }
+  // (2) og:title  (3) document title
   const og = document.querySelector('meta[property="og:title"]');
   if (og && og.content) cands.push(og.content);
   cands.push(document.title);
-  document.querySelectorAll('[role="main"] h1, h1').forEach(h => cands.push(h.innerText));
+  // (4) any h1
+  document.querySelectorAll('h1').forEach(h => cands.push(txt(h)));
+
   for (const c of cands) {
     const v = clean(c);
     if (v && v.length <= 150 && !bad.test(v)) return v;
